@@ -92,6 +92,12 @@ def test_period_controls_use_separate_year_and_month_and_hide_pre_2020():
     assert 'id="periodSelect"' not in html
 
 
+def test_company_dropdown_pins_primary_companies_before_long_mobile_list():
+    html = source()
+    assert "const COMPANY_PRIORITY=['SMI','SFAB']" in html
+    assert "priorityIndex(a[0])-priorityIndex(b[0])" in html
+
+
 def test_client_fails_closed_without_session_or_when_rpc_fails():
     html = source()
     assert re.search(r"if\s*\(\s*!session(?:\?\.)?(?:access_token)?", html)
