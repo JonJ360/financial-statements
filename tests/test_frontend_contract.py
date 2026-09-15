@@ -57,7 +57,7 @@ def test_single_page_has_required_financial_statement_controls():
     visible_text = " ".join(parsed.text)
     for label in (
         "Financial Statements", "Income Statement", "Balance Sheet",
-        "Download Excel", "Download PDF", "V2.3",
+        "Download Excel", "Download PDF", "V2.4",
     ):
         assert label in visible_text
 
@@ -94,8 +94,8 @@ def test_period_controls_use_separate_year_and_month_and_hide_pre_2020():
 
 def test_company_picker_avoids_clipped_mobile_native_dropdown():
     html = source()
-    assert "const COMPANY_PRIORITY=['SMI','SFAB']" in html
-    assert "priorityIndex(a[0])-priorityIndex(b[0])" in html
+    assert "COMPANY_PRIORITY" not in html
+    assert "String(a[1]).localeCompare(String(b[1]))||String(a[0]).localeCompare(String(b[0]))" in html
     assert 'id="companyPickerBtn"' in html
     assert 'id="companyMenu"' in html
     assert 'role="listbox"' in html
