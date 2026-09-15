@@ -1,7 +1,11 @@
 """Static contract tests for the GitHub Pages financial statements client."""
 from html.parser import HTMLParser
 from pathlib import Path
+import json
 import re
+import subprocess
+
+from openpyxl import load_workbook
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,7 +57,7 @@ def test_single_page_has_required_financial_statement_controls():
     visible_text = " ".join(parsed.text)
     for label in (
         "Financial Statements", "Income Statement", "Balance Sheet",
-        "Download Excel", "Download PDF", "V1.2",
+        "Download Excel", "Download PDF", "V2.0",
     ):
         assert label in visible_text
 
@@ -116,14 +120,15 @@ def test_exports_are_real_pinned_libraries_and_spreadsheet_cells_are_sanitized()
     html = source()
     parsed = markup()
     srcs = [script.get("src") or "" for script in parsed.scripts]
-    assert "vendor/xlsx-0.20.3.min.js" in srcs
+    assert "vendor/exceljs-4.4.0-force-full-calc.min.js" in srcs
+    assert "scripts/export_xlsx.js" in srcs
     assert "vendor/jspdf-2.5.2.min.js" in srcs
     assert "vendor/jspdf-autotable-3.8.4.min.js" in srcs
     assert all(not re.match(r"https?://", src) for src in srcs)
     for src in srcs:
         if src:
             assert (ROOT / src).is_file(), f"vendored script is missing: {src}"
-    assert "XLSX.writeFile" in html
+    assert "workbook.xlsx.writeBuffer" in html
     assert "jsPDF" in html and "autoTable" in html and ".save(" in html
     assert "sanitizeSpreadsheetCell" in html
     assert re.search(r"^[^\n]*[=+\-@]", html, re.M), "formula-leading characters must be handled"
@@ -140,19 +145,24 @@ def test_charts_and_drilldown_are_data_driven():
     assert "renderTrendChart" in html
     assert "renderPositionChart" in html
     assert "renderDrilldown" in html
+    assert "row.parent_id===category" in html
+    assert "row.values?.[valueKey]" in html
+    assert "category-row" in html and "data-category" in html
+    assert ".drill-panel{display:block}" in html
+    assert "Choose a statement section" in html
     assert re.search(r"addEventListener\(\s*['\"]click['\"]", html)
 
 
-def test_client_consumes_exact_nested_backend_payload_and_balance_fields():
+def test_client_consumes_exact_nested_backend_payload_without_duplicating_raw_accounts():
     html = source()
     assert "root.payload??root" in html
     assert "nested.statement" in html
-    assert "statement.income_statement" in html
-    assert "statement.balance_sheet" in html
+    assert "statement.presentation" in html
     assert "statement.kpis" in html
     assert "statement.trend" in html
-    assert "row.period_balance" in html
-    assert "row.ending_balance" in html
+    assert "rawIncome" not in html
+    assert "rawBalance" not in html
+    assert "normalizeAccount" not in html
     assert "fiscal_period" in html
     assert "period_id" not in html
     assert "root.payload??root" in html
@@ -162,11 +172,115 @@ def test_client_consumes_exact_nested_backend_payload_and_balance_fields():
     assert "Statement total" not in html
 
 
+def test_lender_view_uses_backend_presentation_with_comparative_columns():
+    html = source()
+    assert "statement.presentation" in html
+    assert "presentation.income_statement" in html
+    assert "presentation.balance_sheet" in html
+    for field in (
+        "current_period", "current_ytd", "prior_period", "prior_ytd",
+        "current_balance", "prior_balance",
+    ):
+        assert field in html
+    assert 'id="incomePeriodHead"' in html
+    assert 'id="incomeYtdHead"' in html
+    assert 'id="incomePriorPeriodHead"' in html
+    assert 'id="incomePriorYtdHead"' in html
+    assert 'id="balanceCurrentHead"' in html
+    assert 'id="balancePriorHead"' in html
+    assert 'class="statement-report-header"' in html
+    assert "row.row_type" in html and "row.level" in html
+    assert "function strictNumber" in html
+    assert "new Set" in html
+    assert "Presentation tie-out failed" in html
+    assert "Number(value)||0" not in html
+
+
+def test_excel_export_is_comparative_structured_and_lender_ready():
+    html = source()
+    exporter = (ROOT / "scripts" / "export_xlsx.js").read_text(encoding="utf-8")
+    assert "vendor/exceljs-4.4.0-force-full-calc.min.js" in html
+    assert "scripts/export_xlsx.js" in html
+    assert "FinancialWorkbook.buildFinancialWorkbook" in html
+    assert "workbook.xlsx.writeBuffer" in html
+    assert '"$"#,##0;("$"#,##0);-' in exporter
+    assert "current_period" in exporter and "prior_ytd" in exporter
+    assert "current_balance" in exporter and "prior_balance" in exporter
+    assert "source.account_number ?" not in exporter
+    assert "row.account_number?`${row.account_number}  `" not in html
+
+
+def test_exceljs_generated_file_preserves_lender_formatting(tmp_path):
+    report = {
+        "meta": {"company_name": "Structural Fab LLC", "fiscal_year": 2026, "fiscal_period": 5},
+        "comparison": {"fiscal_year": 2025, "available": True},
+        "income": [
+            {"id": "revenue", "row_type": "section", "level": 0, "label": "Revenue", "values": {"current_period": "100", "current_ytd": "500", "prior_period": "90", "prior_ytd": "450"}},
+            {"id": "net_income", "row_type": "subtotal", "level": 0, "label": "Net Income", "values": {"current_period": "34", "current_ytd": "170", "prior_period": "30", "prior_ytd": "150"}},
+        ],
+        "balance": [
+            {"id": "assets", "row_type": "heading", "level": 0, "label": "Assets", "values": {"current_balance": "100", "prior_balance": "90"}},
+            {"id": "total_assets", "row_type": "subtotal", "level": 0, "label": "Total Assets", "values": {"current_balance": "100", "prior_balance": "90"}},
+            {"id": "total_liabilities_and_equity", "row_type": "subtotal", "level": 0, "label": "Total Liabilities & Equity", "values": {"current_balance": "100", "prior_balance": "90"}},
+        ],
+    }
+    output = tmp_path / "lender.xlsx"
+    runner = tmp_path / "build.js"
+    runner.write_text(
+        "const fs=require('fs');const api=require(process.argv[2]);"
+        "const report=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));"
+        "(async()=>{const wb=api.buildFinancialWorkbook(report,{month:'May'});"
+        "const data=await wb.xlsx.writeBuffer();fs.writeFileSync(process.argv[4],Buffer.from(data));})()"
+        ".catch(error=>{console.error(error);process.exit(1)});",
+        encoding="utf-8",
+    )
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    subprocess.run(
+        ["node", str(runner), str(ROOT / "scripts" / "export_xlsx.js"), str(report_path), str(output)],
+        check=True,
+    )
+    workbook = load_workbook(output, data_only=False)
+    assert workbook.sheetnames == ["Income Statement", "Balance Sheet", "Controls"]
+    income = workbook["Income Statement"]
+    assert "A1:E1" in {str(region) for region in income.merged_cells.ranges}
+    assert income["A1"].value == "Structural Fab LLC"
+    assert income["A1"].font.bold and income["A1"].font.sz == 16
+    assert income["A6"].fill.fgColor.rgb.endswith("233B61")
+    assert income["A8"].border.bottom.style == "double"
+    assert income["B7"].value == 100 and income["B7"].number_format == '"$"#,##0;("$"#,##0);-'
+    assert income.column_dimensions["A"].width >= 40
+    assert income.freeze_panes == "B7"
+    assert income.sheet_properties.pageSetUpPr.fitToPage
+    assert income.page_setup.fitToHeight == 1
+    assert income.page_setup.orientation == "landscape" and income.page_setup.fitToWidth == 1
+    assert workbook.calculation.fullCalcOnLoad is True
+    assert workbook.calculation.forceFullCalc is True
+    controls = workbook["Controls"]
+    assert controls.sheet_state == "hidden"
+    assert controls["B2"].data_type == "f" and "'Balance Sheet'!B" in controls["B2"].value
+
+
+def test_pdf_export_has_lender_headers_repeating_columns_and_page_numbers():
+    html = source()
+    assert "orientation:'landscape'" in html
+    assert "showHead:'everyPage'" in html
+    assert "Accrual Basis" in html
+    assert "Unaudited" in html
+    assert "Page ${page} of ${pages}" in html
+    assert "putTotalPages" not in html
+    assert "rowPageBreak:'avoid'" in html
+    assert "PDF export failed" in html and "try{setBusy(true)" in html
+    assert "row.raw.row_type" in html
+
+
 def test_page_is_responsive_accessible_and_blue_white_without_purple():
     html = source()
     parsed = markup()
     assert any(meta.get("name") == "viewport" for meta in parsed.meta)
     assert "@media" in html
+    assert ".main{max-width:100vw;overflow-x:hidden}" in html
+    assert ".top-row{align-items:flex-start;flex-wrap:wrap}" in html
     assert "aria-live" in html
     assert ":focus-visible" in html
     assert "--blue" in html and "#ffffff" in html.lower()

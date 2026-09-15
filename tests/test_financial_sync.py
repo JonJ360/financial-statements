@@ -25,7 +25,10 @@ from scripts.financial_sync import (
     source_hash,
     choose_last_periods,
     map_account_row,
+    validate_statement_bridge,
     validate_controls,
+    _balance_section,
+    _income_section,
 )
 from scripts.publish_financials import CredentialError, load_credentials, publish, validate_document
 
@@ -33,6 +36,17 @@ D = decimal.Decimal
 
 
 class CalendarTests(unittest.TestCase):
+    def test_default_period_selection_includes_every_completed_period_from_2020(self):
+        calendar = [
+            {"year": year, "period": month, "start": dt.date(year, month, 1),
+             "end": (dt.date(year + (month == 12), month % 12 + 1, 1) - dt.timedelta(days=1))}
+            for year in range(2019, 2027) for month in range(1, 13)
+        ]
+        selected = choose_last_periods(calendar, dt.date(2026, 9, 14))
+        self.assertEqual((2020, 1), (selected[0]["year"], selected[0]["period"]))
+        self.assertEqual((2026, 8), (selected[-1]["year"], selected[-1]["period"]))
+        self.assertEqual(80, len(selected))
+
     def test_last_24_periods_include_only_completed_periods(self):
         calendar = [
             {"year": year, "period": month, "start": dt.date(year, month, 1),
@@ -64,7 +78,8 @@ class MappingAndPayloadTests(unittest.TestCase):
     def account(self, number="1000-00", category=1, posting_type=0, period_debit="10", period_credit="0",
                 ytd_debit="10", ytd_credit="0", typical_balance=0, **extra):
         row = {
-            "account_index": 1, "account_number": number, "account_description": "Cash",
+            "account_index": int(hashlib.sha256(number.encode()).hexdigest()[:12], 16),
+            "account_number": number, "account_description": "Cash",
             "posting_type": posting_type, "category": category, "category_description": "Cash",
             "typical_balance": typical_balance,
             "period_debit": D(period_debit), "period_credit": D(period_credit),
@@ -72,6 +87,267 @@ class MappingAndPayloadTests(unittest.TestCase):
         }
         row.update(extra)
         return map_account_row(row)
+
+    def lender_rows(self, scale="1", suffix=""):
+        factor = D(scale)
+        def amount(value): return str(D(value) * factor)
+        return [
+            self.account(number=f"1000{suffix}", category=1, period_debit=amount(100), ytd_debit=amount(100)),
+            self.account(number=f"2000{suffix}", category=13, typical_balance=1, period_debit="0", period_credit=amount(50), ytd_debit="0", ytd_credit=amount(50), account_description="Accounts Payable"),
+            self.account(number=f"3000{suffix}", category=23, typical_balance=1, period_debit="0", period_credit=amount(16), ytd_debit="0", ytd_credit=amount(16), account_description="Member Equity"),
+            self.account(number=f"4000{suffix}", category=31, posting_type=1, typical_balance=1, period_debit="0", period_credit=amount(100), ytd_debit="0", ytd_credit=amount(100), account_description="Sales"),
+            self.account(number=f"4010{suffix}", category=32, posting_type=1, period_debit=amount(10), ytd_debit=amount(10), account_description="Sales Returns"),
+            self.account(number=f"5000{suffix}", category=33, posting_type=1, period_debit=amount(30), ytd_debit=amount(30), account_description="Materials"),
+            self.account(number=f"6000{suffix}", category=36, posting_type=1, period_debit=amount(20), ytd_debit=amount(20), account_description="Payroll Wages"),
+            self.account(number=f"6100{suffix}", category=35, posting_type=1, period_debit=amount(5), ytd_debit=amount(5), account_description="Certification & Training"),
+            self.account(number=f"6200{suffix}", category=39, posting_type=1, period_debit=amount(3), ytd_debit=amount(3), account_description="Federal Income Tax"),
+            self.account(number=f"7000{suffix}", category=43, posting_type=1, typical_balance=1, period_debit="0", period_credit=amount(2), ytd_debit="0", ytd_credit=amount(2), account_description="Other Income"),
+        ]
+
+    def test_invalid_posting_and_typical_balance_enums_fail_closed(self):
+        for field, value in (("posting_type", 2), ("typical_balance", -1)):
+            row = {
+                "account_index": 1, "account_number": "1000", "account_description": "Cash",
+                "posting_type": 0, "typical_balance": 0, "category": 1,
+                "category_description": "Cash", "period_debit": 0, "period_credit": 0,
+                "ytd_debit": 0, "ytd_credit": 0,
+            }
+            row[field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(SourceValidationError, field):
+                map_account_row(row)
+
+    def test_hierarchical_comparative_presentations_and_kpi_bridge(self):
+        periods = [
+            {"year": 2025, "period": 5, "start": dt.date(2025, 5, 1), "end": dt.date(2025, 5, 31)},
+            {"year": 2026, "period": 5, "start": dt.date(2026, 5, 1), "end": dt.date(2026, 5, 31)},
+        ]
+        rows = {(2025, 5): self.lender_rows("0.5"), (2026, 5): self.lender_rows()}
+        payload = build_company_payloads(
+            CompanyConfig("SFAB", "Structural Fab LLC", "server", "SFAB"), periods, rows
+        )[1]["payload"]
+        presentation = payload["statement"]["presentation"]
+        income = {row["id"]: row for row in presentation["income_statement"]}
+        balance = {row["id"]: row for row in presentation["balance_sheet"]}
+        self.assertEqual("section", income["revenue"]["row_type"])
+        self.assertEqual("subtotal", income["gross_margin"]["row_type"])
+        self.assertEqual("60.00000", income["gross_margin"]["values"]["current_period"])
+        self.assertEqual("30.00000", income["gross_margin"]["values"]["prior_period"])
+        self.assertEqual("34.00000", income["net_income"]["values"]["current_ytd"])
+        self.assertEqual("17.00000", income["net_income"]["values"]["prior_ytd"])
+        self.assertEqual("20.00000", income["employee_related_expenses"]["values"]["current_period"])
+        self.assertEqual("5.00000", income["other_operating_expenses"]["values"]["current_period"])
+        self.assertEqual("2.00000", income["other_income"]["values"]["current_period"])
+        self.assertEqual("100.00000", balance["total_assets"]["values"]["current_balance"])
+        self.assertEqual("50.00000", balance["total_assets"]["values"]["prior_balance"])
+        self.assertEqual("100.00000", balance["total_liabilities_and_equity"]["values"]["current_balance"])
+        self.assertEqual({"fiscal_year": 2025, "fiscal_period": 5, "available": True}, payload["statement"]["comparison"])
+        self.assertTrue(validate_statement_bridge(payload["statement"])["passed"])
+
+    def test_smi_units_consolidate_by_base_account_and_preserve_detail(self):
+        period = {"year": 2026, "period": 5, "start": dt.date(2026, 5, 1), "end": dt.date(2026, 5, 31)}
+        rows = self.lender_rows("0.5", "-00") + self.lender_rows("0.5", "-01")
+        payload = build_company_payloads(
+            CompanyConfig("SMI", "SMI", "server", "SMI"), [period], {(2026, 5): rows}
+        )[0]["payload"]
+        revenue_accounts = [row for row in payload["statement"]["presentation"]["income_statement"]
+                            if row.get("parent_id") == "revenue" and row["row_type"] == "account"
+                            and row.get("account_number") == "4000"]
+        self.assertEqual(1, len(revenue_accounts))
+        self.assertEqual("4000", revenue_accounts[0]["account_number"])
+        self.assertEqual("100.00000", revenue_accounts[0]["values"]["current_period"])
+        self.assertEqual({"4000-00", "4000-01"}, {row["account_number"] for row in revenue_accounts[0]["detail"]})
+        self.assertEqual(20, len(payload["statement"]["income_statement"] + payload["statement"]["balance_sheet"]) - 1)
+
+    def test_presentation_suppresses_zero_only_accounts_and_cleans_gp_labels(self):
+        period = {"year": 2026, "period": 5, "start": dt.date(2026, 5, 1), "end": dt.date(2026, 5, 31)}
+        rows = self.lender_rows()
+        rows.append(self.account(
+            number="9999", category=35, posting_type=1,
+            period_debit="0", period_credit="0", ytd_debit="0", ytd_credit="0",
+            account_description="EMPTY ACCOUNT--",
+        ))
+        rows[0]["account_description"] = "CASH--"
+        payload = build_company_payloads(
+            CompanyConfig("SFAB", "Structural Fab LLC", "server", "SFAB"),
+            [period], {(2026, 5): rows},
+        )[0]["payload"]
+        presentation = payload["statement"]["presentation"]
+        shown = presentation["income_statement"] + presentation["balance_sheet"]
+        self.assertFalse(any(row.get("account_number") == "9999" for row in shown))
+        cash = next(row for row in shown if row.get("account_number") == "1000")
+        self.assertEqual("CASH", cash["label"])
+
+    def test_live_gp_category_semantics_drive_lender_sections(self):
+        def row(category, description):
+            return {"category_id": category, "account_description": description}
+
+        self.assertEqual("intangible_assets", _balance_section(row(11, "INTANGIBLES")))
+        self.assertEqual("other_assets", _balance_section(row(12, "COOP STOCK")))
+        self.assertEqual("current_liabilities", _balance_section(row(13, "ACCOUNTS PAYABLE")))
+        self.assertEqual("current_liabilities", _balance_section(row(16, "PAYROLL TAX PAYABLE")))
+        self.assertEqual("current_liabilities", _balance_section(row(14, "NOTES PAYABLE OFFICER")))
+        self.assertEqual("long_term_liabilities", _balance_section(row(14, "NOTES PAYABLE BANK")))
+        self.assertEqual("equity", _balance_section(row(14, "UNREALIZED GAIN ON INVESTMENTS")))
+        self.assertEqual("equity", _balance_section(row(30, "RETAINED EARNINGS")))
+        self.assertEqual("current_earnings", _balance_section({**row(30, "CURRENT EARNINGS"), "synthetic": True}))
+        self.assertEqual("revenue", _income_section(row(32, "SALES RETURNS")))
+        self.assertEqual("cost_of_revenue", _income_section(row(32, "DISCOUNTS GIVEN")))
+        self.assertEqual("employee_related_expenses", _income_section(row(36, "COMMISSIONS")))
+        self.assertEqual("employee_related_expenses", _income_section(row(37, "RETIREMENT BENEFITS")))
+        self.assertEqual("equity_distribution", _income_section(row(37, "PARTNER DRAW")))
+        self.assertEqual("other_expense", _income_section(row(38, "INTEREST EXPENSE")))
+        self.assertEqual("income_tax", _income_section(row(39, "INCOME TAX EXPENSE")))
+        self.assertEqual("employee_related_expenses", _income_section(row(39, "FICA TAXES")))
+        self.assertEqual("other_operating_expenses", _income_section(row(39, "REAL ESTATE TAXES")))
+        self.assertEqual("other_income", _income_section(row(43, "INTEREST INCOME")))
+        self.assertEqual("employee_related_expenses", _income_section(row(42, "SALARIES & WAGES--MAIN")))
+        self.assertEqual("employee_related_expenses", _income_section(row(42, "EMPLOYEE HEALTH INSURANCE")))
+        self.assertEqual("income_tax", _income_section(row(42, "INCOME TAX EXPENSE")))
+        self.assertEqual("other_expense", _income_section(row(42, "LOSS/GAIN ON SALE OF ASSETS")))
+        self.assertEqual("other_operating_expenses", _income_section(row(42, "ADVERTISING & MARKETING")))
+
+    def test_unclosed_income_statement_opening_balance_flows_to_current_earnings(self):
+        period = {"year": 2026, "period": 1, "start": dt.date(2026, 1, 1), "end": dt.date(2026, 1, 31)}
+        rows = [
+            self.account(number="1000", category=1, posting_type=0, typical_balance=0, period_debit="0", ytd_debit="100", opening_debit="100"),
+            self.account(number="2000", category=13, posting_type=0, typical_balance=1, period_debit="0", ytd_debit="0", ytd_credit="50", opening_credit="50", account_description="Accounts Payable"),
+            self.account(number="3000", category=30, posting_type=0, typical_balance=1, period_debit="0", ytd_debit="0", ytd_credit="30", opening_credit="30", account_description="Retained Earnings"),
+            self.account(number="4000", category=31, posting_type=1, typical_balance=1, period_debit="0", ytd_debit="0", ytd_credit="20", opening_credit="20", account_description="Unclosed Sales"),
+        ]
+        payload = build_company_payloads(
+            CompanyConfig("SFAB", "Structural Fab LLC", "server", "SFAB"),
+            [period], {(2026, 1): rows},
+        )[0]["payload"]
+        balance = {row["id"]: row for row in payload["statement"]["presentation"]["balance_sheet"]}
+        self.assertEqual("20.00000", balance["current_earnings"]["values"]["current_balance"])
+        self.assertEqual("100.00000", balance["total_liabilities_and_equity"]["values"]["current_balance"])
+
+    def test_partner_draw_is_an_equity_distribution_not_an_expense(self):
+        period = {"year": 2026, "period": 1, "start": dt.date(2026, 1, 1), "end": dt.date(2026, 1, 31)}
+        rows = [
+            self.account(number="1000", category=1, posting_type=0, typical_balance=0, period_debit="100", ytd_debit="100", account_description="Cash"),
+            self.account(number="2000", category=13, posting_type=0, typical_balance=1, period_debit="0", period_credit="50", ytd_debit="0", ytd_credit="50", account_description="Accounts Payable"),
+            self.account(number="3000", category=30, posting_type=0, typical_balance=1, period_debit="0", period_credit="30", ytd_debit="0", ytd_credit="30", account_description="Retained Earnings"),
+            self.account(number="4000", category=31, posting_type=1, typical_balance=1, period_debit="0", period_credit="43.00749", ytd_debit="0", ytd_credit="43.00749", account_description="Sales"),
+            self.account(number="617-00-00", category=37, posting_type=1, typical_balance=0, period_debit="23.00749", ytd_debit="23.00749", account_description="PARTNER DRAW"),
+        ]
+        payload = build_company_payloads(
+            CompanyConfig("VGA", "VGA LLC", "server", "VGA"),
+            [period], {(2026, 1): rows},
+        )[0]["payload"]
+        income = {row["id"]: row for row in payload["statement"]["presentation"]["income_statement"]}
+        balance = {row["id"]: row for row in payload["statement"]["presentation"]["balance_sheet"]}
+        self.assertEqual("43.00749", income["net_income"]["values"]["current_ytd"])
+        self.assertEqual("-23.00749", balance["equity_distributions"]["values"]["current_balance"])
+        self.assertEqual("100.00000", balance["total_liabilities_and_equity"]["values"]["current_balance"])
+        self.assertNotIn("equity_distribution:account:617-00-00", income)
+
+    def test_contra_assets_and_atypical_normal_balances_use_statement_section_signs(self):
+        period = {"year": 2026, "period": 5, "start": dt.date(2026, 5, 1), "end": dt.date(2026, 5, 31)}
+        rows = [
+            self.account(number="1000", category=1, typical_balance=0, period_debit="100", ytd_debit="100"),
+            self.account(number="1500", category=9, typical_balance=0, period_debit="50", ytd_debit="50", account_description="Equipment"),
+            self.account(number="1590", category=10, typical_balance=1, period_debit="0", period_credit="20", ytd_debit="0", ytd_credit="20", account_description="Accumulated Depreciation"),
+            self.account(number="2000", category=13, typical_balance=1, period_debit="0", period_credit="50", ytd_debit="0", ytd_credit="50", account_description="Accounts Payable"),
+            self.account(number="3000", category=30, typical_balance=1, period_debit="0", period_credit="80", ytd_debit="0", ytd_credit="80", account_description="Retained Earnings"),
+        ]
+        payload = build_company_payloads(
+            CompanyConfig("SFAB", "Structural Fab LLC", "server", "SFAB"),
+            [period], {(2026, 5): rows},
+        )[0]["payload"]
+        balance = {row["id"]: row for row in payload["statement"]["presentation"]["balance_sheet"]}
+        self.assertEqual("130.00000", balance["total_assets"]["values"]["current_balance"])
+        self.assertEqual("130.00000", balance["total_liabilities_and_equity"]["values"]["current_balance"])
+
+    def test_nonzero_retained_earnings_category_30_balances_with_synthetic_current_earnings(self):
+        period = {"year": 2026, "period": 5, "start": dt.date(2026, 5, 1), "end": dt.date(2026, 5, 31)}
+        rows = [
+            self.account(number="1000", category=1, posting_type=0, typical_balance=0, period_debit="0", period_credit="0", ytd_debit="100", ytd_credit="0"),
+            self.account(number="2000", category=13, posting_type=0, typical_balance=1, period_debit="0", period_credit="0", ytd_debit="0", ytd_credit="50"),
+            self.account(number="3000", category=30, posting_type=0, typical_balance=1, period_debit="0", period_credit="0", ytd_debit="0", ytd_credit="30", account_description="RETAINED EARNINGS"),
+            self.account(number="4000", category=31, posting_type=1, typical_balance=1, period_debit="0", period_credit="0", opening_debit="0", opening_credit="0", ytd_debit="0", ytd_credit="20", account_description="SALES"),
+        ]
+        payload = build_company_payloads(
+            CompanyConfig("SFAB", "Structural Fab LLC", "server", "SFAB"),
+            [period], {(2026, 5): rows},
+        )[0]["payload"]
+        balance = {row["id"]: row for row in payload["statement"]["presentation"]["balance_sheet"]}
+        self.assertEqual("50.00000", balance["total_equity"]["values"]["current_balance"])
+        self.assertEqual("100.00000", balance["total_liabilities_and_equity"]["values"]["current_balance"])
+
+    def test_balance_sheet_presentation_includes_period_zero_opening_balances(self):
+        period = {"year": 2026, "period": 1, "start": dt.date(2026, 1, 1), "end": dt.date(2026, 1, 31)}
+        rows = [
+            self.account(number="1000", category=1, posting_type=0, typical_balance=0, period_debit="0", period_credit="0", opening_debit="100", opening_credit="0", ytd_debit="100", ytd_credit="0"),
+            self.account(number="2000", category=13, posting_type=0, typical_balance=1, period_debit="0", period_credit="0", opening_debit="0", opening_credit="50", ytd_debit="0", ytd_credit="50"),
+            self.account(number="3000", category=30, posting_type=0, typical_balance=1, period_debit="0", period_credit="0", opening_debit="0", opening_credit="50", ytd_debit="0", ytd_credit="50", account_description="RETAINED EARNINGS"),
+        ]
+        payload = build_company_payloads(
+            CompanyConfig("SFAB", "Structural Fab LLC", "server", "SFAB"),
+            [period], {(2026, 1): rows},
+        )[0]["payload"]
+        balance = {row["id"]: row for row in payload["statement"]["presentation"]["balance_sheet"]}
+        self.assertEqual("100.00000", balance["total_assets"]["values"]["current_balance"])
+        self.assertEqual("100.00000", balance["total_liabilities_and_equity"]["values"]["current_balance"])
+
+    def test_account_level_controls_fail_closed(self):
+        period = {"year": 2026, "period": 5, "start": dt.date(2026, 5, 1), "end": dt.date(2026, 5, 31)}
+        company = CompanyConfig("SFAB", "Structural Fab LLC", "server", "SFAB")
+        cases = {}
+        duplicate = self.lender_rows(); duplicate[1]["account_index"] = duplicate[0]["account_index"]
+        cases["duplicate account_index"] = duplicate
+        nonfinancial = self.lender_rows(); nonfinancial[0]["category_id"] = 48; nonfinancial[0]["category"] = "NON FINANCIAL"
+        cases["nonfinancial"] = nonfinancial
+        mismatch = self.lender_rows(); mismatch[0]["posting_type"] = 1
+        cases["posting/category"] = mismatch
+        unmapped = self.lender_rows(); unmapped[0]["category_id"] = 99; unmapped[0]["category"] = "Unknown"
+        cases["unmapped nonzero"] = unmapped
+        missing_number = self.lender_rows(); missing_number[0]["account_number"] = ""
+        cases["missing account_number"] = missing_number
+        missing_category = self.lender_rows(); missing_category[0]["category"] = ""
+        cases["missing category"] = missing_category
+        for message, accounts in cases.items():
+            with self.subTest(message=message), self.assertRaisesRegex(SourceValidationError, message):
+                build_company_payloads(company, [period], {(2026, 5): accounts})
+
+    def test_requested_period_coverage_is_exact_and_duplicate_free(self):
+        periods = [
+            {"year": 2026, "period": 4, "start": dt.date(2026, 4, 1), "end": dt.date(2026, 4, 30)},
+            {"year": 2026, "period": 5, "start": dt.date(2026, 5, 1), "end": dt.date(2026, 5, 31)},
+        ]
+        company = CompanyConfig("SFAB", "Structural Fab LLC", "server", "SFAB")
+        with self.assertRaisesRegex(SourceValidationError, "period coverage"):
+            build_company_payloads(company, periods, {(2026, 4): self.lender_rows()})
+        with self.assertRaisesRegex(SourceValidationError, "duplicate requested period"):
+            build_company_payloads(company, [periods[0], periods[0]], {(2026, 4): self.lender_rows()})
+
+    def test_mapping_and_control_metadata_are_versioned_and_hashed(self):
+        period = {"year": 2026, "period": 5, "start": dt.date(2026, 5, 1), "end": dt.date(2026, 5, 31)}
+        payload = build_company_payloads(
+            CompanyConfig("SFAB", "Structural Fab LLC", "server", "SFAB"), [period],
+            {(2026, 5): self.lender_rows()},
+        )[0]["payload"]
+        metadata = payload["statement"]["model_metadata"]
+        for prefix in ("mapping", "control"):
+            self.assertRegex(metadata[f"{prefix}_version"], r"^\d+\.\d+\.\d+$")
+            self.assertRegex(metadata[f"{prefix}_sha256"], r"^[0-9a-f]{64}$")
+        self.assertNotIn("baseline", canonical_json(metadata).lower())
+        self.assertEqual({"fiscal_year": 2025, "fiscal_period": 5, "available": False}, payload["statement"]["comparison"])
+        for row in payload["statement"]["presentation"]["income_statement"]:
+            self.assertIsNone(row["values"]["prior_period"])
+            self.assertIsNone(row["values"]["prior_ytd"])
+        for row in payload["statement"]["presentation"]["balance_sheet"]:
+            self.assertIsNone(row["values"]["prior_balance"])
+
+    def test_kpi_to_statement_bridge_tampering_fails_closed(self):
+        period = {"year": 2026, "period": 5, "start": dt.date(2026, 5, 1), "end": dt.date(2026, 5, 31)}
+        statement = build_company_payloads(
+            CompanyConfig("SFAB", "Structural Fab LLC", "server", "SFAB"), [period],
+            {(2026, 5): self.lender_rows()},
+        )[0]["payload"]["statement"]
+        statement["kpis"]["net_income"] = "999.00000"
+        with self.assertRaisesRegex(SourceValidationError, "KPI-to-statement bridge"):
+            validate_statement_bridge(statement)
 
     def test_mapping_uses_pstngtyp_and_preserves_formatted_number_and_category(self):
         account = self.account(number="0010-200-30", posting_type=1, category=7, typical_balance=1)
@@ -104,7 +380,7 @@ class MappingAndPayloadTests(unittest.TestCase):
         }
         payloads = build_company_payloads(CompanyConfig("SFAB", "Structural Fab LLC", "server", "SFAB"), periods, rows)
         second = payloads[1]["payload"]
-        self.assertEqual({"income_statement", "balance_sheet", "kpis", "trend"}, set(second["statement"]))
+        self.assertTrue({"income_statement", "balance_sheet", "kpis", "trend"} <= set(second["statement"]))
         self.assertEqual("15.00000", second["statement"]["balance_sheet"][0]["ending_balance"])
         self.assertEqual(2, len(second["statement"]["trend"]))
         self.assertEqual("5.00000", second["statement"]["kpis"]["revenue"])
@@ -115,12 +391,12 @@ class MappingAndPayloadTests(unittest.TestCase):
         period = {"year": 2026, "period": 1, "start": dt.date(2026, 1, 1), "end": dt.date(2026, 1, 31)}
         rows = {(2026, 1): [
             self.account(number="1000", category=1, ytd_debit="115", period_debit="115"),
-            self.account(number="2000", category=11, typical_balance=1, ytd_debit="0", ytd_credit="50", period_debit="0", period_credit="50"),
-            self.account(number="3000", category=20, typical_balance=1, ytd_debit="0", ytd_credit="20", period_debit="0", period_credit="20"),
+            self.account(number="2000", category=13, typical_balance=1, ytd_debit="0", ytd_credit="50", period_debit="0", period_credit="50", account_description="Accounts Payable"),
+            self.account(number="3000", category=23, typical_balance=1, ytd_debit="0", ytd_credit="20", period_debit="0", period_credit="20"),
             self.account(number="4000", category=31, posting_type=1, typical_balance=1, ytd_debit="0", ytd_credit="100", period_debit="0", period_credit="100"),
             self.account(number="4010", category=32, posting_type=1, typical_balance=0, ytd_debit="10", ytd_credit="0", period_debit="10", period_credit="0"),
             self.account(number="5000", category=33, posting_type=1, typical_balance=0, ytd_debit="40", ytd_credit="0", period_debit="40", period_credit="0"),
-            self.account(number="6000", category=34, posting_type=1, typical_balance=0, ytd_debit="5", ytd_credit="0", period_debit="5", period_credit="0"),
+            self.account(number="6000", category=35, posting_type=1, typical_balance=0, ytd_debit="5", ytd_credit="0", period_debit="5", period_credit="0"),
         ]}
         payload = build_company_payloads(CompanyConfig("SFAB", "Structural Fab LLC", "server", "SFAB"), [period], rows)[0]["payload"]
         statement = payload["statement"]
@@ -240,6 +516,66 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(["financial_stage_run", "financial_stage_period_batch", "financial_validate_run", "financial_promote_run", "financial_verify_current"], [c[1] for c in calls])
         self.assertEqual([credentials["current_ar_ingestion_key"]] * 3 + [credentials["current_ar_promotion_key"], credentials["operator_verification_key"]], [c[0] for c in calls])
         self.assertTrue(result["verified"])
+
+    def test_publish_limits_batches_by_encoded_request_size(self):
+        document = self.document()
+        second = json.loads(json.dumps(document["periods"][0]))
+        second["fiscal_period"] = 9
+        second["period_start"] = "2026-09-01"
+        second["period_end"] = "2026-09-30"
+        second["payload"].update(
+            fiscal_period=9,
+            period_start="2026-09-01",
+            period_end="2026-09-30",
+            padding="x" * 900,
+        )
+        second["payload_canonical"] = canonical_json(second["payload"])
+        second["payload_sha256"] = canonical_hash(second["payload"])
+        document["periods"].append(second)
+        document["run"]["period_count"] = 2
+        document["run"]["manifest"].append(
+            {"company_code": "SFAB", "fiscal_year": 2026, "fiscal_period": 9}
+        )
+        document["run"]["source_sha256"] = source_hash(document["periods"])
+        calls = []
+
+        def fake_rpc(base, key, token, name, payload):
+            calls.append((name, payload))
+            if name == "financial_stage_run":
+                return "run-id"
+            if name == "financial_verify_current":
+                return [{
+                    "run_id": "run-id",
+                    "source_sha256": document["run"]["source_sha256"],
+                    "is_current": True,
+                    "period_count": 2,
+                }]
+            return None
+
+        publish(
+            document,
+            self.credentials(),
+            rpc_call=fake_rpc,
+            batch_size=25,
+            max_batch_bytes=3_000,
+        )
+        batches = [payload["p_periods"] for name, payload in calls if name == "financial_stage_period_batch"]
+        self.assertEqual([1, 1], [len(batch) for batch in batches])
+        self.assertTrue(all(len(json.dumps({"p_run_id": "run-id", "p_periods": batch}, separators=(",", ":")).encode("utf-8")) <= 3_000 for batch in batches))
+
+    def test_oversized_period_is_rejected_before_remote_run_creation(self):
+        document = self.document()
+        document["periods"][0]["payload"]["padding"] = "x" * 5_000
+        document["periods"][0]["payload_canonical"] = canonical_json(document["periods"][0]["payload"])
+        document["periods"][0]["payload_sha256"] = canonical_hash(document["periods"][0]["payload"])
+        document["run"]["source_sha256"] = source_hash(document["periods"])
+        calls = []
+        with self.assertRaisesRegex(ValueError, "exceeds max_batch_bytes"):
+            publish(
+                document, self.credentials(), rpc_call=lambda *args: calls.append(args),
+                max_batch_bytes=3_000,
+            )
+        self.assertEqual([], calls)
 
     def test_preflight_rejects_tampering_duplicate_keys_bad_batch_and_wrong_jwt_before_rpc(self):
         document = self.document()

@@ -171,14 +171,44 @@ def rpc(base: str, publishable: str, token: str, name: str, payload: dict[str, A
     raise RuntimeError(f"{name} failed without response")
 
 
+def _period_batches(
+    periods: list[Mapping[str, Any]], run_id: Any, *, batch_size: int, max_batch_bytes: int,
+):
+    batch: list[Mapping[str, Any]] = []
+    for period in periods:
+        candidate = [*batch, period]
+        payload = {"p_run_id": run_id, "p_periods": candidate}
+        encoded_size = len(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+        if batch and (len(candidate) > batch_size or encoded_size > max_batch_bytes):
+            yield batch
+            batch = [period]
+            payload = {"p_run_id": run_id, "p_periods": batch}
+            encoded_size = len(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+        else:
+            batch = candidate
+        if encoded_size > max_batch_bytes:
+            raise ValueError("one period exceeds max_batch_bytes")
+    if batch:
+        yield batch
+
+
 def publish(
     document: Mapping[str, Any], credentials: Mapping[str, str], *,
     rpc_call: Callable[..., Any] = rpc, batch_size: int = 25,
+    max_batch_bytes: int = 4_000_000,
 ) -> dict[str, Any]:
     if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size <= 0:
         raise ValueError("batch_size must be a positive integer")
+    if isinstance(max_batch_bytes, bool) or not isinstance(max_batch_bytes, int) or max_batch_bytes <= 0:
+        raise ValueError("max_batch_bytes must be a positive integer")
     validate_credentials(credentials)
     run, periods = validate_document(document)
+    # Validate and partition the entire upload before creating remote state. Supabase run IDs
+    # are UUIDs, so the fixed UUID keeps encoded-size checks equivalent to the real request.
+    prepared_batches = list(_period_batches(
+        periods, "00000000-0000-0000-0000-000000000000",
+        batch_size=batch_size, max_batch_bytes=max_batch_bytes,
+    ))
     base, key = credentials["supabase_url"], credentials["publishable_key"]
     ingest = credentials["current_ar_ingestion_key"]
     run_id = rpc_call(base, key, ingest, "financial_stage_run", {
@@ -188,9 +218,9 @@ def publish(
     })
     if not run_id:
         raise RuntimeError("financial_stage_run returned no run ID")
-    for offset in range(0, len(periods), batch_size):
+    for batch in prepared_batches:
         rpc_call(base, key, ingest, "financial_stage_period_batch", {
-            "p_run_id": run_id, "p_periods": periods[offset:offset + batch_size],
+            "p_run_id": run_id, "p_periods": batch,
         })
     rpc_call(base, key, ingest, "financial_validate_run", {"p_run_id": run_id})
     rpc_call(base, key, credentials["current_ar_promotion_key"], "financial_promote_run", {"p_run_id": run_id})
