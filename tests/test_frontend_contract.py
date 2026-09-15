@@ -57,7 +57,7 @@ def test_single_page_has_required_financial_statement_controls():
     visible_text = " ".join(parsed.text)
     for label in (
         "Financial Statements", "Income Statement", "Balance Sheet",
-        "Download Excel", "Download PDF", "V2.2",
+        "Download Excel", "Download PDF", "V2.3",
     ):
         assert label in visible_text
 
@@ -102,6 +102,14 @@ def test_company_picker_avoids_clipped_mobile_native_dropdown():
     assert "max-height:min(60vh,420px);overflow-y:auto" in html
     assert "companyMenu').addEventListener('click'" in html
     assert "select.dispatchEvent(new Event('change'))" in html
+
+
+def test_catalog_rpc_pages_past_supabase_row_limit():
+    html = source()
+    assert "const CATALOG_PAGE_SIZE=1000" in html
+    assert ".range(offset,offset+CATALOG_PAGE_SIZE-1)" in html
+    assert "if(page.length<CATALOG_PAGE_SIZE)break" in html
+    assert "offset+=CATALOG_PAGE_SIZE" in html
 
 
 def test_client_fails_closed_without_session_or_when_rpc_fails():
