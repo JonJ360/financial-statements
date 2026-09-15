@@ -275,7 +275,7 @@ begin
        or pg_catalog.jsonb_array_length(p.payload#>'{statement,trend}') = 0
        or exists (
          select 1 from pg_catalog.jsonb_array_elements(p.payload#>'{statement,trend}') as t(value)
-         where pg_catalog.coalesce((t.value#>>'{controls,passed}')::boolean, false) is not true
+         where coalesce((t.value#>>'{controls,passed}')::boolean, false) is not true
        )
        or not exists (
          select 1

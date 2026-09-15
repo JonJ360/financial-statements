@@ -303,6 +303,7 @@ class MigrationContractTests(unittest.TestCase):
         catalog_body = sql.split("financial_statement_catalog", 1)[1].split("create or replace function public.financial_statement_period", 1)[0]
         self.assertNotIn("payload", catalog_body)
         self.assertGreaterEqual(sql.count("auth.uid() is distinct from 'b605d98f-498e-4a94-94cf-e055ed2b5fcc'::uuid"), 2)
+        self.assertNotIn("pg_catalog.coalesce(", sql)
 
     def test_stage_and_validate_take_exclusive_run_locks(self):
         sql = next((ROOT / "supabase" / "migrations").glob("*.sql")).read_text(encoding="utf-8").lower()
