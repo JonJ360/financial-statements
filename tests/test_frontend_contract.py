@@ -57,7 +57,7 @@ def test_single_page_has_required_financial_statement_controls():
     visible_text = " ".join(parsed.text)
     for label in (
         "Financial Statements", "Income Statement", "Balance Sheet",
-        "Download Excel", "Download PDF", "V2.0",
+        "Download Excel", "Download PDF", "V2.1",
     ):
         assert label in visible_text
 
