@@ -57,7 +57,7 @@ def test_single_page_has_required_financial_statement_controls():
     visible_text = " ".join(parsed.text)
     for label in (
         "Financial Statements", "Income Statement", "Balance Sheet",
-        "Download Excel", "Download PDF", "V2.1",
+        "Download Excel", "Download PDF", "V2.2",
     ):
         assert label in visible_text
 
@@ -92,10 +92,16 @@ def test_period_controls_use_separate_year_and_month_and_hide_pre_2020():
     assert 'id="periodSelect"' not in html
 
 
-def test_company_dropdown_pins_primary_companies_before_long_mobile_list():
+def test_company_picker_avoids_clipped_mobile_native_dropdown():
     html = source()
     assert "const COMPANY_PRIORITY=['SMI','SFAB']" in html
     assert "priorityIndex(a[0])-priorityIndex(b[0])" in html
+    assert 'id="companyPickerBtn"' in html
+    assert 'id="companyMenu"' in html
+    assert 'role="listbox"' in html
+    assert "max-height:min(60vh,420px);overflow-y:auto" in html
+    assert "companyMenu').addEventListener('click'" in html
+    assert "select.dispatchEvent(new Event('change'))" in html
 
 
 def test_client_fails_closed_without_session_or_when_rpc_fails():
