@@ -43,7 +43,7 @@ def markup() -> Markup:
 def test_single_page_has_required_financial_statement_controls():
     parsed = markup()
     required_ids = {
-        "authGate", "email", "password", "loginBtn", "signOutBtn",
+        "authGate", "password", "loginBtn", "signOutBtn",
         "companySelect", "periodSelect", "incomeTab", "balanceTab",
         "incomeStatement", "balanceSheet", "accountDrilldown",
         "downloadExcel", "downloadPdf", "trendChart", "positionChart",
@@ -53,7 +53,7 @@ def test_single_page_has_required_financial_statement_controls():
     visible_text = " ".join(parsed.text)
     for label in (
         "Financial Statements", "Income Statement", "Balance Sheet",
-        "Download Excel", "Download PDF", "V1.0",
+        "Download Excel", "Download PDF", "V1.1",
     ):
         assert label in visible_text
 
@@ -69,6 +69,14 @@ def test_client_uses_supabase_password_auth_and_only_required_rpcs():
     for parameter in ("p_company_code", "p_fiscal_year", "p_fiscal_period"):
         assert parameter in html
     assert "smi_sales_current_snapshot" not in html
+
+
+def test_jon_login_matches_other_apps_pin_flow():
+    html = source()
+    assert 'label for="password">PIN</label>' in html
+    assert "const AUTH_EMAIL='jonj@360-llc.com'" in html
+    assert "email:AUTH_EMAIL" in html
+    assert 'id="email"' not in html
 
 
 def test_client_fails_closed_without_session_or_when_rpc_fails():

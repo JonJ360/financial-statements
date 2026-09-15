@@ -30,16 +30,15 @@
     <div class="login-mark" aria-hidden="true">360</div>
     <div class="eyebrow">Private reporting</div>
     <h1 id="loginTitle">Financial Statements</h1>
-    <p>Authorized access only. Sign in with your 360 Solutions account to view live financial data.</p>
-    <div class="field"><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="username" required></div>
-    <div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required></div>
+    <p>Use the same PIN as your other 360 apps.</p>
+    <div class="field"><label for="password">PIN</label><input id="password" name="password" type="password" autocomplete="current-password" required></div>
     <button class="primary" id="loginBtn" type="submit">Sign in securely</button>
     <div class="auth-error" id="authError" role="alert" aria-live="polite"></div>
   </form>
 </section>
 <div class="shell hidden" id="application" aria-hidden="true">
   <aside class="sidebar">
-    <div class="brand"><div class="brand-mark">360</div><div><div class="eyebrow">Jon-only reporting</div><div class="brand-name">Financial Statements</div><span class="version">V1.0</span></div></div>
+    <div class="brand"><div class="brand-mark">360</div><div><div class="eyebrow">Jon-only reporting</div><div class="brand-name">Financial Statements</div><span class="version">V1.1</span></div></div>
     <nav class="side-nav" aria-label="Financial statement sections"><button class="active" type="button" data-jump="summary">Summary</button><button type="button" data-jump="statements">Statements</button></nav>
     <div class="side-foot"><div><span class="secure-dot"></span>Secured by row-level access</div><div>Live Supabase reporting</div></div>
   </aside>
@@ -63,6 +62,7 @@
 'use strict';
 const SUPA_URL='https://inhwadbibwkakacdvoxu.supabase.co';
 const SUPA_KEY='sb_publishable_mvtNl3RxZB_V8xSserWVZA_8givexBq';
+const AUTH_EMAIL='jonj@360-llc.com';
 const SB=window.supabase?.createClient(SUPA_URL,SUPA_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
 const state={catalog:[],report:null,activeStatement:'income',charts:{trend:null,position:null},expanded:new Set()};
 const $=id=>document.getElementById(id);
@@ -105,7 +105,7 @@ function downloadExcelFile(){if(!state.report)return;const workbook=XLSX.utils.b
 function pdfRows(rows){return [...grouped(rows)].flatMap(([category,accounts])=>[[sanitizeSpreadsheetCell(category),'',money(accounts.reduce((sum,row)=>sum+row.amount,0))],...accounts.map(row=>['',sanitizeSpreadsheetCell(row.account_number?`${row.account_number} · ${row.account}`:row.account),money(row.amount)])])}
 function downloadPdfFile(){if(!state.report)return;const {jsPDF}=window.jspdf;const doc=new jsPDF({orientation:'portrait',unit:'pt',format:'letter'});const company=$('companySelect').selectedOptions[0]?.textContent||'';const period=$('periodSelect').selectedOptions[0]?.textContent||'';doc.setTextColor(35,59,97);doc.setFontSize(18);doc.text('Financial Statements',40,42);doc.setFontSize(10);doc.setTextColor(99,112,131);doc.text(`${company} · ${period}`,40,60);let y=78;for(const [title,rows] of [['Income Statement',state.report.income],['Balance Sheet',state.report.balance]]){doc.setFontSize(13);doc.setTextColor(23,34,53);doc.text(title,40,y);doc.autoTable({startY:y+9,head:[['Category','Account','Amount']],body:pdfRows(rows),theme:'grid',styles:{fontSize:8,cellPadding:4},headStyles:{fillColor:[46,111,217]},columnStyles:{2:{halign:'right'}},didParseCell:data=>{if(data.section==='body'&&!data.row.raw[1])data.cell.styles.fontStyle='bold'}});y=doc.lastAutoTable.finalY+25;if(y>690&&title==='Income Statement'){doc.addPage();y=42}}doc.save(`${fileBase()}.pdf`)}
 async function initialize(){if(!SB){clearFinancialData();showAuthGate('Secure login library did not load.');return}const {data:{session},error}=await SB.auth.getSession();if(error){clearFinancialData();showAuthGate('Session verification failed.');return}if(!session?.access_token){clearFinancialData();showAuthGate();return}showApplication(session);try{await loadCatalog()}catch(error){clearFinancialData();setStatus(`Access could not be verified: ${error.message||'Request failed.'}`,'error');showAuthGate('Access could not be verified. Please sign in again.')}}
-$('loginForm').addEventListener('submit',async event=>{event.preventDefault();$('loginBtn').disabled=true;$('authError').textContent='Signing in…';try{if(!SB)throw new Error('Secure login is unavailable.');const result=await SB.auth.signInWithPassword({email:$('email').value.trim(),password:$('password').value});if(result.error)throw result.error;$('password').value='';showApplication(result.data.session);await loadCatalog()}catch(error){clearFinancialData();showAuthGate(error.message||'Sign-in failed.')}finally{$('loginBtn').disabled=false}});
+$('loginForm').addEventListener('submit',async event=>{event.preventDefault();$('loginBtn').disabled=true;$('authError').textContent='Signing in…';try{if(!SB)throw new Error('Secure login is unavailable.');const result=await SB.auth.signInWithPassword({email:AUTH_EMAIL,password:$('password').value});if(result.error)throw result.error;$('password').value='';showApplication(result.data.session);await loadCatalog()}catch(error){clearFinancialData();showAuthGate(error.message||'Sign-in failed.')}finally{$('loginBtn').disabled=false}});
 $('signOutBtn').addEventListener('click',async()=>{clearFinancialData();if(SB)await SB.auth.signOut();showAuthGate('You have been signed out.');$('password').value=''});
 $('companySelect').addEventListener('change',()=>{clearReportOnly();populatePeriods();setStatus($('companySelect').value?'Choose an available period.':'Choose a company.');$('periodCaption').textContent='Select a company and reporting period'});
 $('periodSelect').addEventListener('change',loadPeriod);$('incomeTab').addEventListener('click',()=>selectStatement('income'));$('balanceTab').addEventListener('click',()=>selectStatement('balance'));$('downloadExcel').addEventListener('click',downloadExcelFile);$('downloadPdf').addEventListener('click',downloadPdfFile);
