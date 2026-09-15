@@ -44,7 +44,7 @@ def test_single_page_has_required_financial_statement_controls():
     parsed = markup()
     required_ids = {
         "authGate", "password", "loginBtn", "signOutBtn",
-        "companySelect", "periodSelect", "incomeTab", "balanceTab",
+        "companySelect", "yearSelect", "monthSelect", "incomeTab", "balanceTab",
         "incomeStatement", "balanceSheet", "accountDrilldown",
         "downloadExcel", "downloadPdf", "trendChart", "positionChart",
         "statusMessage",
@@ -53,7 +53,7 @@ def test_single_page_has_required_financial_statement_controls():
     visible_text = " ".join(parsed.text)
     for label in (
         "Financial Statements", "Income Statement", "Balance Sheet",
-        "Download Excel", "Download PDF", "V1.1",
+        "Download Excel", "Download PDF", "V1.2",
     ):
         assert label in visible_text
 
@@ -77,6 +77,15 @@ def test_jon_login_matches_other_apps_pin_flow():
     assert "const AUTH_EMAIL='jonj@360-llc.com'" in html
     assert "email:AUTH_EMAIL" in html
     assert 'id="email"' not in html
+
+
+def test_period_controls_use_separate_year_and_month_and_hide_pre_2020():
+    html = source()
+    assert 'label for="yearSelect">Year</label>' in html
+    assert 'label for="monthSelect">Month</label>' in html
+    assert "const MIN_REPORT_YEAR=2020" in html
+    assert "Number(fiscalYear(row))>=MIN_REPORT_YEAR" in html
+    assert 'id="periodSelect"' not in html
 
 
 def test_client_fails_closed_without_session_or_when_rpc_fails():
