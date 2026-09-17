@@ -607,7 +607,7 @@ class PublisherTests(unittest.TestCase):
 class MigrationContractTests(unittest.TestCase):
     def test_migration_has_atomic_immutable_rls_rpc_and_jon_only_contract(self):
         migrations = sorted((ROOT / "supabase" / "migrations").glob("*.sql"))
-        self.assertEqual(1, len(migrations))
+        self.assertGreaterEqual(len(migrations), 1)
         sql = migrations[0].read_text(encoding="utf-8").lower()
         for fragment in (
             "financial_runs", "financial_periods", "financial_current", "force row level security",
@@ -649,6 +649,13 @@ class MigrationContractTests(unittest.TestCase):
         self.assertIn("for update", validate)
         self.assertNotIn("for share", stage)
         self.assertNotIn("for share", validate)
+
+    def test_validate_run_scopes_expensive_payload_checks_to_requested_run(self):
+        migrations = sorted((ROOT / "supabase" / "migrations").glob("*.sql"))
+        sql = "\n".join(path.read_text(encoding="utf-8").lower() for path in migrations)
+        validate = sql.rsplit("financial_validate_run", 1)[1]
+        payload_check = validate.rsplit("if exists", 1)[1].split("raise exception 'period trend", 1)[0]
+        self.assertIn("where p.run_id = p_run_id", payload_check)
 
     def test_source_connection_prefers_encryption_and_supports_existing_private_sql_viewer(self):
         source = (ROOT / "scripts" / "financial_sync.py").read_text(encoding="utf-8")

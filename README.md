@@ -28,7 +28,13 @@ python scripts/financial_sync.py --company SFAB --company REB --as-of 2026-09-14
 
 Omit `--company` to require all 25 companies to succeed in one extraction. If any company fails, no output is replaced.
 
-## Supabase publisher (not run automatically)
+## Hourly refresh
+
+`scripts/hourly_refresh.py` extracts all 25 companies, validates every completed fiscal period, compares the resulting source hash with the verified production pointer, and publishes atomically only when the financial data changed. A local exclusive lock prevents overlapping runs. Success is silent and recorded in `C:\Users\jonj\AppData\Local\hermes\logs\financial-statements-refresh.json`; failures are re-raised so the scheduler can alert.
+
+Hermes schedules this script every hour. The Financial Statements app therefore reads a production snapshot that is normally no more than one successful hourly run behind GP. The app still reads only the currently verified, atomically promoted snapshot; an extraction or validation failure leaves the prior statement set live.
+
+## Supabase publisher
 
 `supabase/migrations/202609140001_financial_statements.sql` has been reviewed and applied to the production project, together with its validation-COALESCE correction. It creates immutable run, period, and run-event rows; atomic current/previous pointers; retry-idempotent stage/batch/validate/promote operations; an explicit preconditioned rollback RPC; SQL/Python-equivalent hash and manifest validation; FORCE RLS; and hardened `SECURITY DEFINER` functions with empty search paths and fully qualified object references. Direct table access is revoked from API and operational roles, including `service_role`; only the minimum RPC execute grants remain. The two frontend read RPCs are Jon-only and bound to UUID `b605d98f-498e-4a94-94cf-e055ed2b5fcc`.
 
