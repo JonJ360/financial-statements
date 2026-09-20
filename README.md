@@ -1,12 +1,12 @@
 # GP Financial Statements
 
-Read-only Dynamics GP extraction for 25 active companies and an atomic Supabase publishing contract. The extractor creates one JSON payload for each company/fiscal period; generated payloads are local artifacts and are not committed.
+Read-only Dynamics GP extraction for 23 active companies and an atomic Supabase publishing contract. The extractor creates one JSON payload for each company/fiscal period; generated payloads are local artifacts and are not committed.
 
 ## Scope
 
-`BBMTS DMERC FFCAP FTSOL LPPAR MILT OLH OPAT OZAK1 OZDEV RDSC REB RRCOF RSS SEAMX SFAB SOL SPFAR TPC TROP UNIFO UUFGO VGA VPENG SMI`
+`BBMTS DMERC FFCAP FTSOL LPPAR MILT OLH OPAT OZAK1 OZDEV RDSC REB RRCOF RSS SEAMX SFAB SOL SPFAR UNIFO UUFGO VGA VPENG SMI`
 
-The main companies use the reviewed GP endpoint; SMI uses its separate reviewed endpoint. `SOL1` is intentionally excluded. Labels come from `gp360_company_mapping_2026.csv`, with `REB` displayed as **360 Sales LLC** and `SEAMX` as **Sea Max LLC**.
+The main companies use the reviewed GP endpoint; SMI uses its separate reviewed endpoint. `SOL1` is intentionally excluded. `TROP` (Tropic Paws) and `TPC` (The Perry Center) are excluded from extraction and the current serving snapshot; GP records and historical immutable snapshots are retained. Labels come from `gp360_company_mapping_2026.csv`, with `REB` displayed as **360 Sales LLC** and `SEAMX` as **Sea Max LLC**.
 
 ## Extraction contract
 
@@ -26,11 +26,11 @@ python -m unittest tests.test_financial_sync -v
 python scripts/financial_sync.py --company SFAB --company REB --as-of 2026-09-14 --output data/sample-sfab-reb.json
 ```
 
-Omit `--company` to require all 25 companies to succeed in one extraction. If any company fails, no output is replaced.
+Omit `--company` to require all 23 companies to succeed in one extraction. If any company fails, no output is replaced.
 
 ## Hourly refresh
 
-`scripts/hourly_refresh.py` extracts all 25 companies, validates every completed fiscal period, compares the resulting source hash with the verified production pointer, and publishes atomically only when the financial data changed. A local exclusive lock prevents overlapping runs. Success is silent and recorded in `C:\Users\jonj\AppData\Local\hermes\logs\financial-statements-refresh.json`; failures are re-raised so the scheduler can alert.
+`scripts/hourly_refresh.py` extracts all 23 companies, validates every completed fiscal period, compares the resulting source hash with the verified production pointer, and publishes atomically only when the financial data changed. A local exclusive lock prevents overlapping runs. Success is silent and recorded in `C:\Users\jonj\AppData\Local\hermes\logs\financial-statements-refresh.json`; failures are re-raised so the scheduler can alert.
 
 Hermes schedules this script every hour. The Financial Statements app therefore reads a production snapshot that is normally no more than one successful hourly run behind GP. The app still reads only the currently verified, atomically promoted snapshot; an extraction or validation failure leaves the prior statement set live.
 

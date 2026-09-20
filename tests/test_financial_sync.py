@@ -431,7 +431,7 @@ class MappingAndPayloadTests(unittest.TestCase):
                     validate_controls(broken)
 
     def test_company_allowlist_is_exact_and_excludes_sol1(self):
-        expected = "BBMTS DMERC FFCAP FTSOL LPPAR MILT OLH OPAT OZAK1 OZDEV RDSC REB RRCOF RSS SEAMX SFAB SOL SPFAR TPC TROP UNIFO UUFGO VGA VPENG SMI".split()
+        expected = "BBMTS DMERC FFCAP FTSOL LPPAR MILT OLH OPAT OZAK1 OZDEV RDSC REB RRCOF RSS SEAMX SFAB SOL SPFAR UNIFO UUFGO VGA VPENG SMI".split()
         self.assertEqual(expected, [company.code for company in ACTIVE_COMPANIES])
         self.assertNotIn("SOL1", [company.code for company in ACTIVE_COMPANIES])
         self.assertEqual("360 Sales LLC", next(c.name for c in ACTIVE_COMPANIES if c.code == "REB"))

@@ -43,8 +43,7 @@ _COMPANY_NAMES = {
     "RDSC": "Rail District Sign Company LLC", "REB": "360 Sales LLC",
     "RRCOF": "Roasted Rail Coffee House, LLC", "RSS": "Real Steel Solutions LLC",
     "SEAMX": "Sea Max LLC", "SFAB": "Structural Fab LLC", "SOL": "360 Solutions LLC",
-    "SPFAR": "Structural Properties, LLP (Fargo)", "TPC": "The Perry Center",
-    "TROP": "Tropic Paws LLC", "UNIFO": "Uniform Unit — Dickinson",
+    "SPFAR": "Structural Properties, LLP (Fargo)", "UNIFO": "Uniform Unit — Dickinson",
     "UUFGO": "Uniform Unit — Fargo", "VGA": "Vintage Garden LLC",
     "VPENG": "Ope It's Cold, LLC dba Vampire Penguin", "SMI": "SMI",
 }
