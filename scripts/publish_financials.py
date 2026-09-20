@@ -162,7 +162,7 @@ def rpc(base: str, publishable: str, token: str, name: str, payload: dict[str, A
                 return json.loads(raw) if raw else None
         except urllib.error.HTTPError as exc:
             response_body = exc.read().decode(errors="replace")[:500]
-            if exc.code not in (429, 500, 502, 503, 504) or attempt == 2:
+            if '"57014"' in response_body or exc.code not in (429, 500, 502, 503, 504) or attempt == 2:
                 raise RuntimeError(f"{name} failed: HTTP {exc.code} {response_body}") from None
         except (TimeoutError, urllib.error.URLError):
             if attempt == 2:
@@ -192,6 +192,20 @@ def _period_batches(
         yield batch
 
 
+def _stage_period_batch(rpc_call, base, key, token, run_id, periods):
+    """Retry an atomic statement timeout with smaller idempotent batches."""
+    try:
+        rpc_call(base, key, token, "financial_stage_period_batch", {
+            "p_run_id": run_id, "p_periods": periods,
+        })
+    except RuntimeError as exc:
+        if '"57014"' not in str(exc) or len(periods) <= 1:
+            raise
+        midpoint = len(periods) // 2
+        _stage_period_batch(rpc_call, base, key, token, run_id, periods[:midpoint])
+        _stage_period_batch(rpc_call, base, key, token, run_id, periods[midpoint:])
+
+
 def publish(
     document: Mapping[str, Any], credentials: Mapping[str, str], *,
     rpc_call: Callable[..., Any] = rpc, batch_size: int = 25,
@@ -219,9 +233,7 @@ def publish(
     if not run_id:
         raise RuntimeError("financial_stage_run returned no run ID")
     for batch in prepared_batches:
-        rpc_call(base, key, ingest, "financial_stage_period_batch", {
-            "p_run_id": run_id, "p_periods": batch,
-        })
+        _stage_period_batch(rpc_call, base, key, ingest, run_id, batch)
     rpc_call(base, key, ingest, "financial_validate_run", {"p_run_id": run_id})
     rpc_call(base, key, credentials["current_ar_promotion_key"], "financial_promote_run", {"p_run_id": run_id})
     result = rpc_call(base, key, credentials["operator_verification_key"], "financial_verify_current", {})
