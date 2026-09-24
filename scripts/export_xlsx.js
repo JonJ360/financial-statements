@@ -18,6 +18,36 @@
     return /^[=+\-@]/.test(text) ? `'${text}` : text;
   }
 
+  // Keep source values and IDs intact; only relocate category totals.
+  // Headings identify groups, while existing subtotals retain their order.
+  function traditionalRows(rows) {
+    const pending = [];
+    const result = [];
+    for (const row of rows) {
+      while (pending.length && Number(row.level) <= Number(pending[pending.length - 1].level)) result.push(pending.pop());
+      if (row.row_type === 'section') {
+        pending.push({ ...row, label: /^Total\b/i.test(row.label) ? row.label : `Total ${row.label}` });
+      } else {
+        result.push(row.row_type === 'heading' ? { ...row, values: {} } : row);
+      }
+    }
+    while (pending.length) result.push(pending.pop());
+    return result;
+  }
+
+  function monthlyReconStatus(metadata) {
+    const verified = metadata && metadata.basis === 'GP fiscal-period module closure';
+    const status = verified && ['completed', 'open', 'mixed', 'unknown'].includes(metadata.status)
+      && (metadata.status !== 'completed' || metadata.completed === true) ? metadata.status : 'unknown';
+    const explanations = {
+      completed: 'Completed — GP fiscal-period modules closed.',
+      open: 'Open — GP fiscal-period modules remain open.',
+      mixed: 'Mixed — GP module or origin closure evidence has differing states.',
+      unknown: 'Unknown — GP closure evidence unavailable or unverified.'
+    };
+    return { status, completed: status === 'completed', explanation: explanations[status] };
+  }
+
   function statementSpec(report, type, month) {
     const year = Number(report.meta.fiscal_year);
     const prior = Number(report.comparison && report.comparison.fiscal_year) || year - 1;
@@ -54,7 +84,11 @@
     sheet.addRow([spec.title]);
     sheet.addRow([spec.subtitle]);
     sheet.addRow(['Accrual Basis · Unaudited']);
-    sheet.addRow([]);
+    const recon = monthlyReconStatus(report.monthly_recon);
+    sheet.addRow([`${recon.completed ? '☑' : '☐'} Monthly recon completed · ${month} ${report.meta.fiscal_year} · ${recon.explanation} Read-only GP status.`]);
+    sheet.mergeCells(5, 1, 5, spec.headers.length);
+    sheet.getCell('A5').alignment = { horizontal: 'right', vertical: 'middle', wrapText: true };
+    sheet.getCell('A5').font = { name: 'Arial', size: 8, color: { argb: COLORS.muted } };
     sheet.addRow(spec.headers);
     sheet.mergeCells(1, 1, 1, spec.headers.length);
     sheet.mergeCells(2, 1, 2, spec.headers.length);
@@ -63,7 +97,7 @@
 
     sheet.getRow(1).height = 23;
     sheet.getRow(2).height = 20;
-    sheet.getRow(5).height = 8;
+    sheet.getRow(5).height = 30;
     sheet.getCell('A1').font = { name: 'Arial', size: 16, bold: true, color: { argb: COLORS.ink } };
     sheet.getCell('A2').font = { name: 'Arial', size: 13, bold: true, color: { argb: COLORS.navy } };
     for (const address of ['A3', 'A4']) {
@@ -78,7 +112,7 @@
     });
 
     const rowNumbers = {};
-    for (const source of spec.rows) {
+    for (const source of traditionalRows(spec.rows)) {
       const level = Math.max(0, Math.min(2, Number(source.level) || 0));
       const name = `${'  '.repeat(level)}${source.label || ''}`;
       const values = spec.keys.map(key => {
@@ -131,5 +165,5 @@
     return workbook;
   }
 
-  return { buildFinancialWorkbook, CURRENCY_FORMAT };
+  return { buildFinancialWorkbook, traditionalRows, monthlyReconStatus, CURRENCY_FORMAT };
 }));

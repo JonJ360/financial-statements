@@ -181,10 +181,29 @@ def connect_company(company: CompanyConfig, target: str = CREDENTIAL_TARGET) -> 
 
 
 CALENDAR_SQL = """
+WITH origin_checks AS (
+  SELECT p.YEAR1, p.PERIODID, COUNT(*) origin_row_count,
+         SUM(CASE WHEN o.CLOSED IS NULL OR o.CLOSED NOT IN (0,1)
+                       OR o.SERIES NOT BETWEEN 2 AND 7 THEN 1 ELSE 0 END) origin_invalid_count,
+         SUM(CASE WHEN o.CLOSED <> CASE o.SERIES
+             WHEN 2 THEN p.PSERIES_1 WHEN 3 THEN p.PSERIES_2
+             WHEN 4 THEN p.PSERIES_3 WHEN 5 THEN p.PSERIES_4
+             WHEN 6 THEN p.PSERIES_5 WHEN 7 THEN p.PSERIES_6
+             END THEN 1 ELSE 0 END) origin_mismatch_count
+  FROM dbo.SY40100 p
+  JOIN dbo.SY40100 o ON o.YEAR1=p.YEAR1 AND o.PERIODID=p.PERIODID AND o.SERIES<>0
+  WHERE p.SERIES=0 AND p.PERIODID>0
+  GROUP BY p.YEAR1,p.PERIODID
+)
 SELECT CAST(p.YEAR1 AS int) fiscal_year, CAST(p.PERIODID AS int) fiscal_period,
-       CAST(p.PERIODDT AS date) period_start, CAST(p.PERDENDT AS date) period_end
+       CAST(p.PERIODDT AS date) period_start, CAST(p.PERDENDT AS date) period_end,
+       p.PSERIES_1,p.PSERIES_2,p.PSERIES_3,p.PSERIES_4,p.PSERIES_5,p.PSERIES_6,
+       COALESCE(o.origin_row_count,0) origin_row_count,
+       COALESCE(o.origin_invalid_count,0) origin_invalid_count,
+       COALESCE(o.origin_mismatch_count,0) origin_mismatch_count
 FROM dbo.SY40100 p
 JOIN dbo.SY40101 y ON y.YEAR1=p.YEAR1
+LEFT JOIN origin_checks o ON o.YEAR1=p.YEAR1 AND o.PERIODID=p.PERIODID
 WHERE p.PERIODID > 0 AND p.SERIES=0
   AND p.PERIODDT >= y.FSTFSCDY AND p.PERDENDT <= y.LSTFSCDY
 ORDER BY fiscal_year, fiscal_period
@@ -259,6 +278,33 @@ def _decimal(value: Any) -> D:
 
 def _money(value: Any) -> str:
     return format(_decimal(value), ".5f")
+
+
+def monthly_recon_status(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Operational GP module closure, not an audit or evidence of who closed it."""
+    flags = {f"PSERIES_{i}": row.get(f"PSERIES_{i}") for i in range(1, 7)}
+    counts = [row.get(key) for key in (
+        "origin_row_count", "origin_invalid_count", "origin_mismatch_count")]
+    valid_counts = all(type(value) is int and value >= 0 for value in counts)
+    total, invalid, mismatches = counts
+    if not valid_counts or total == 0 or invalid:
+        origin_status = "unknown"
+    else:
+        origin_status = "mixed" if mismatches else "consistent"
+    if any(type(value) not in (int, bool) or value not in (0, 1) for value in flags.values()) or origin_status == "unknown":
+        status = "unknown"
+    elif origin_status == "mixed" or len(set(flags.values())) > 1:
+        status = "mixed"
+    else:
+        status = "completed" if all(flags.values()) else "open"
+    return {
+        "status": status, "completed": status == "completed",
+        "basis": "GP fiscal-period module closure",
+        "module_flags": flags,
+        "origin_check": {"status": origin_status, "row_count": total,
+                         "invalid_count": invalid, "mismatch_count": mismatches},
+        "interpretation": "Operational close indicator; not an audit or named-person attribution.",
+    }
 
 
 def choose_last_periods(
@@ -787,6 +833,7 @@ def _period_payload(
         "fiscal_year": int(period["year"]), "fiscal_period": int(period["period"]),
         "period_start": _date(period["start"]).isoformat(), "period_end": _date(period["end"]).isoformat(),
         "statement": statement,
+        "monthly_recon": monthly_recon_status(period.get("close_evidence", {})),
     }
     canonical = canonical_json(payload)
     return {
@@ -890,7 +937,7 @@ FROM (VALUES
 def extract_company(connection: Any, company: CompanyConfig, as_of: dt.date, period_count: int | None = None) -> list[dict[str,Any]]:
     cursor=connection.cursor(); verify_read_only(cursor)
     calendar_rows=_fetch(cursor,CALENDAR_SQL)
-    calendar=[{"year":r["fiscal_year"],"period":r["fiscal_period"],"start":r["period_start"],"end":r["period_end"]} for r in calendar_rows]
+    calendar=[{"year":r["fiscal_year"],"period":r["fiscal_period"],"start":r["period_start"],"end":r["period_end"],"close_evidence":r} for r in calendar_rows]
     periods=choose_last_periods(calendar,as_of,period_count)
     if not periods: raise SourceValidationError("no eligible fiscal periods")
     raw=_fetch(cursor,ACCOUNT_SQL,min(p["year"] for p in periods),max(p["year"] for p in periods))

@@ -19,6 +19,14 @@ The main companies use the reviewed GP endpoint; SMI uses its separate reviewed 
 - Each staged period is an envelope containing `payload`, its exact sorted/minified UTF-8 JSON as `payload_canonical`, and `payload_sha256`; the persisted row stores only `payload`. The run hash is SHA-256 of the lowercase period SHA strings concatenated in `(company_code, fiscal_year, fiscal_period)` order. The run also carries an explicit manifest of every expected period key.
 - The browser calls `financial_statement_catalog()` for metadata only, then `financial_statement_period(p_company_code, p_fiscal_year, p_fiscal_period)` for exactly the selected payload. Both RPCs independently bind `auth.uid()` to Jon's reviewed UUID. The browser does not persist financial payloads or preload the run.
 
+## V2.6 statement presentation and monthly reconciliation
+
+All income-statement and balance-sheet category totals follow their account detail consistently in the browser, PDF and Excel. Financial calculations are unchanged.
+
+Each selected fiscal month has a read-only **Monthly recon completed** checkbox. `payload.monthly_recon` uses GP `SY40100` SERIES=0 flags `PSERIES_1` through `PSERIES_6`, cross-checked against nonzero-series transaction-origin closure flags for that fiscal year/period. All six closed with consistent origin evidence means completed; open, mixed and unknown remain unchecked. This is an operational close indicator, not an audit certification or evidence of who completed the work. Missing legacy metadata is unknown. Closure changes participate in snapshot hashes and the existing hourly refresh; GP is never modified.
+
+Full tests: `python -m pytest tests -q`. Opt-in local Edge visual/export checks: `FINANCIAL_EDGE_VERIFY=1 python -m pytest tests -q -s`.
+
 ## Run
 
 ```bash
