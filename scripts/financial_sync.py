@@ -311,14 +311,14 @@ def choose_last_periods(
     calendar: Iterable[Mapping[str, Any]], as_of: dt.date, count: int | None = None,
     min_year: int = MIN_FISCAL_YEAR,
 ) -> list[dict[str, Any]]:
-    """Include every started fiscal month, regardless of GP closure status.
+    """Include all configured fiscal months, regardless of date or closure.
 
-    as_of bounds calendar availability, not individual posting dates. Current
-    months use the same posted GP period totals and controls as historical ones.
+    as_of is retained for caller compatibility, not period eligibility. Future
+    months contain actual posted GP balances, never projections.
     """
     eligible = [
         dict(p) for p in calendar
-        if int(p["period"]) > 0 and int(p["year"]) >= min_year and _date(p["start"]) <= as_of
+        if int(p["period"]) > 0 and int(p["year"]) >= min_year
     ]
     eligible.sort(key=lambda p: (_date(p["start"]), int(p["year"]), int(p["period"])))
     if count is None:
