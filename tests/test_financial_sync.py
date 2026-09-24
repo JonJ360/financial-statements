@@ -36,7 +36,7 @@ D = decimal.Decimal
 
 
 class CalendarTests(unittest.TestCase):
-    def test_default_period_selection_includes_every_completed_period_from_2020(self):
+    def test_default_period_selection_includes_every_started_period_from_2020(self):
         calendar = [
             {"year": year, "period": month, "start": dt.date(year, month, 1),
              "end": (dt.date(year + (month == 12), month % 12 + 1, 1) - dt.timedelta(days=1))}
@@ -44,10 +44,10 @@ class CalendarTests(unittest.TestCase):
         ]
         selected = choose_last_periods(calendar, dt.date(2026, 9, 14))
         self.assertEqual((2020, 1), (selected[0]["year"], selected[0]["period"]))
-        self.assertEqual((2026, 8), (selected[-1]["year"], selected[-1]["period"]))
-        self.assertEqual(80, len(selected))
+        self.assertEqual((2026, 9), (selected[-1]["year"], selected[-1]["period"]))
+        self.assertEqual(81, len(selected))
 
-    def test_last_24_periods_include_only_completed_periods(self):
+    def test_last_24_periods_include_current_open_period(self):
         calendar = [
             {"year": year, "period": month, "start": dt.date(year, month, 1),
              "end": (dt.date(year + (month == 12), month % 12 + 1, 1) - dt.timedelta(days=1))}
@@ -55,23 +55,32 @@ class CalendarTests(unittest.TestCase):
         ]
         selected = choose_last_periods(calendar, dt.date(2026, 9, 14), 24)
         self.assertEqual(24, len(selected))
-        self.assertEqual((2024, 9), (selected[0]["year"], selected[0]["period"]))
-        self.assertEqual((2026, 8), (selected[-1]["year"], selected[-1]["period"]))
+        self.assertEqual((2024, 10), (selected[0]["year"], selected[0]["period"]))
+        self.assertEqual((2026, 9), (selected[-1]["year"], selected[-1]["period"]))
 
-    def test_future_postings_are_excluded_until_period_end(self):
+    def test_current_period_is_available_before_period_end(self):
         calendar = [
             {"year": 2026, "period": 8, "start": dt.date(2026, 8, 1), "end": dt.date(2026, 8, 31)},
             {"year": 2026, "period": 9, "start": dt.date(2026, 9, 1), "end": dt.date(2026, 9, 30)},
         ]
         selected = choose_last_periods(calendar, dt.date(2026, 9, 14), 24)
-        self.assertEqual([8], [period["period"] for period in selected])
+        self.assertEqual([8, 9], [period["period"] for period in selected])
+
+    def test_selection_ignores_close_status_and_uses_actual_fiscal_start(self):
+        calendar = [
+            {"year": 2027, "period": 1, "start": "2026-09-24", "end": "2026-10-23",
+             "close_evidence": {"PSERIES_1": 0}},
+            {"year": 2027, "period": 2, "start": "2026-10-24", "end": "2026-11-23",
+             "close_evidence": {"PSERIES_1": 1}},
+        ]
+        self.assertEqual([calendar[0]], choose_last_periods(calendar, dt.date(2026, 9, 24)))
 
     def test_period_zero_is_never_selected(self):
         calendar = [
             {"year": 2026, "period": 0, "start": dt.date(2025, 12, 31), "end": dt.date(2025, 12, 31)},
             {"year": 2026, "period": 1, "start": dt.date(2026, 1, 1), "end": dt.date(2026, 1, 31)},
         ]
-        self.assertEqual([], choose_last_periods(calendar, dt.date(2026, 1, 10), 24))
+        self.assertEqual([calendar[1]], choose_last_periods(calendar, dt.date(2026, 1, 10), 24))
 
 
 class MappingAndPayloadTests(unittest.TestCase):
