@@ -99,11 +99,44 @@ def test_standard_layout_real_edge():
                 chunks=page.evaluate("['income','balance'].flatMap(type=>pdfPageChunks(pdfRows(state.report[type],type),state.report.scope_note?28:30))")
                 assert len(pdf)==len(chunks), 'Unexpected automatic overflow page'
                 for i,p in enumerate(pdf):
+                    assert (p.rect.width, p.rect.height)==(612,792), 'PDF must be portrait Letter'
                     assert len(chunks[i])>=10, 'Orphan statement totals page'
                     assert chunks[i][-1]['row_type']!='heading'
                     p.get_pixmap(matrix=fitz.Matrix(1.3,1.3)).save(output/(name+f' PDF {i+1}.png'))
                 receipts.append({'company':company,'branch':branch,'pdf_pages':len(pdf),'xlsx_rows':{s.title:s.max_row for s in workbook},'row_values_exact':True,'net_income':expected['kpis']['net_income']})
             workbook.close()
+            assert page.locator('#includeGraphs').count()==1, 'PDF graph opt-in control missing'
+            assert not page.locator('#includeGraphs').is_checked()
+            with fitz.open(output/(name+'.pdf')) as plain:
+                assert not any(p.get_images() for p in plain)
+                plain_text=[p.get_text().split('Confidential')[0] for p in plain]
+            for i,field in enumerate(['revenue','gross_profit','operating_expenses','net_income']):
+                assert page.evaluate(f'state.charts.trend.data.datasets[{i}].data')==[float(r[field]) for r in expected['trend']]
+            assert page.evaluate('state.charts.position.data.datasets[0].data')==[report['totals'][k] for k in ['assets','liabilities','equity']]
+            page.evaluate("window.printSources=[];window.originalPdfChartImage=pdfChartImage;pdfChartImage=source=>{printSources.push(JSON.parse(JSON.stringify(source.data)));return originalPdfChartImage(source)};void 0")
+            page.check('#includeGraphs')
+            with page.expect_download() as pending:
+                page.click('#downloadPdf')
+            pending.value.save_as(str(output/(name+' graphs.pdf')))
+            assert page.evaluate('JSON.stringify(printSources)===JSON.stringify([state.charts.trend.data,state.charts.position.data])')
+            page.evaluate('pdfChartImage=originalPdfChartImage;void 0')
+            with fitz.open(output/(name+' graphs.pdf')) as pdf:
+                assert len(pdf)==len(chunks)+1
+                assert [p.get_text().split('Confidential')[0] for p in list(pdf)[:-1]]==plain_text
+                graph=pdf[-1]
+                assert len(graph.get_image_info())==2
+                assert 'Performance trend' in graph.get_text() and 'Financial position' in graph.get_text()
+                assert report['meta']['company_name'] in graph.get_text()
+                assert 'June 2026' in graph.get_text()
+                for i,p in enumerate(pdf):
+                    assert (p.rect.width,p.rect.height)==(612,792)
+                    for word in p.get_text('words'):
+                        assert 40 <= word[0] < word[2] <= 572 and 10 <= word[1] < word[3] <= 780, word
+                    for image in p.get_image_info():
+                        assert p.rect.contains(fitz.Rect(image['bbox']))
+                    p.get_pixmap(matrix=fitz.Matrix(1.3,1.3)).save(output/(name+f' graphs PDF {i+1}.png'))
+                receipts[-1].update({'graphs_pdf_pages':len(pdf),'portrait_points':[612,792],'graphs_off_images':0,'graphs_on_images':2,'statement_text_unchanged':True,'text_and_images_within_margins':True})
+            page.uncheck('#includeGraphs')
         page.set_viewport_size({'width':390,'height':844})
         page.locator('#statements').scroll_into_view_if_needed()
         page.screenshot(path=str(output/'mobile.png'))

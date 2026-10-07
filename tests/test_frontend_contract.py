@@ -57,7 +57,7 @@ def test_single_page_has_required_financial_statement_controls():
     visible_text = " ".join(parsed.text)
     for label in (
         "Financial Statements", "Income Statement", "Balance Sheet",
-        "Download Excel", "Download PDF", "V2.8",
+        "Download Excel", "Download PDF", "V2.9",
     ):
         assert label in visible_text
 
@@ -283,7 +283,7 @@ def test_exceljs_generated_file_preserves_lender_formatting(tmp_path):
 
 def test_pdf_export_has_lender_headers_repeating_columns_and_page_numbers():
     html = source()
-    assert "orientation:'landscape'" in html
+    assert "orientation:'portrait'" in html
     assert "showHead:'everyPage'" in html
     assert "Accrual Basis" in html
     assert "Unaudited" in html

@@ -75,7 +75,7 @@ const report={meta:{fiscal_year:2026,fiscal_period:5},monthly_recon:metadata,inc
 const status=FinancialWorkbook.monthlyReconStatus(metadata);
 assert.equal(status.status,expected);assert.equal(status.completed,expected==='completed');
 const boxes=[],marks=[];const doc={setFontSize(){},setDrawColor(){},setLineWidth(){},rect(...args){boxes.push(args)},line(...args){marks.push(args)},text(){},splitTextToSize(t){return [t]},getTextWidth(){return 100}};
-state.report=report;drawPdfRecon(doc);assert.equal(boxes[0][0],638,'PDF checkbox adjacent to its right-aligned label');assert.equal(marks.length,expected==='completed'?2:0);
+state.report=report;drawPdfRecon(doc);assert.equal(boxes[0][0],42,'PDF checkbox inside portrait left margin');assert.equal(marks.length,expected==='completed'?2:0);
 state.report=report;renderMonthlyRecon();assert.equal($('monthlyRecon').checked,expected==='completed');
 assert($('monthlyReconNote').textContent.includes(status.explanation));
 const wb=FinancialWorkbook.buildFinancialWorkbook(report,{month:'May'});
