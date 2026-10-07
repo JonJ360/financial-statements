@@ -261,7 +261,7 @@ def test_exceljs_generated_file_preserves_lender_formatting(tmp_path):
         check=True,
     )
     workbook = load_workbook(output, data_only=False)
-    assert workbook.sheetnames == ["Income Statement", "Balance Sheet", "Controls"]
+    assert workbook.sheetnames == ["Income Statement", "Balance Sheet", "Account Detail", "Controls"]
     income = workbook["Income Statement"]
     assert "A1:E1" in {str(region) for region in income.merged_cells.ranges}
     assert income["A1"].value == "Structural Fab LLC"
@@ -270,7 +270,7 @@ def test_exceljs_generated_file_preserves_lender_formatting(tmp_path):
     assert income["A8"].border.bottom.style == "double"
     assert income["B7"].value == 100 and income["B7"].number_format == '"$"#,##0;("$"#,##0);-'
     assert income.column_dimensions["A"].width >= 40
-    assert income.freeze_panes == "B7"
+    assert all(sheet.freeze_panes is None for sheet in workbook)
     assert income.sheet_properties.pageSetUpPr.fitToPage
     assert income.page_setup.fitToHeight == 1
     assert income.page_setup.orientation == "landscape" and income.page_setup.fitToWidth == 1

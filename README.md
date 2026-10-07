@@ -27,6 +27,15 @@ Each selected fiscal month has a read-only **Monthly recon completed** checkbox.
 
 Full tests: `python -m pytest tests -q`. Opt-in local Edge visual/export checks: `FINANCIAL_EDGE_VERIFY=1 python -m pytest tests -q -s`.
 
+## Standard financial layout (mapping 4.0.0)
+
+- All 23 companies share income/balance headings and totals. Detail is classified by account meaning rather than copying one company's numeric codes. Office staff, office expenses, HR, interest, employee insurance and profit sharing are Other Operating Expenses; shop payroll, payroll, FICA and workers compensation are Employee-Related Expenses. Other income/discounts earned are contra-expenses in the shared template; source GP debit/credit and net income are unchanged.
+- RRCOF and BBMTS preserve their historical detail order. SMI COOP STOCK is grouped with Plant, Property & Equipment per the supplied SMI template, without changing assets.
+- SMI provides consolidated and last-GL-segment branch views: 00 Fargo, 01 Grand Forks, 02 Fergus Falls and 03 Bismarck. Current/prior statements, KPIs, trends and exports use the selected branch. Zero-only unknown checklinks branches remain in accounting controls but are not selectable. Prior-only activity remains visible. Branch balances are unallocated, not standalone legal-entity balance sheets; central cash/AR/liabilities remain where GP recorded them. No balancing plugs or allocations are made.
+- Screen/PDF/XLSX share `traditionalRows`. Each detail heading precedes accounts and its total follows them. PDF pages are balanced to avoid orphan-total pages. Excel includes an Account Detail sheet with exact current/prior GP debit/credit fields and has no frozen or split panes.
+- Offline full-snapshot verification: `python scripts/verify_standard_layout.py --source data/financial-statements.json --output PRIVATE_OUTPUT_DIR`. This writes only private evidence and a rebuilt snapshot, preserves raw accounts/period coordinates/close metadata, and never publishes or accesses GP.
+- Real Edge/download verification: set `FINANCIAL_STANDARD_EDGE=1`, `FINANCIAL_REBUILT_SNAPSHOT` to the rebuilt JSON and `FINANCIAL_EDGE_OUTPUT` to a private artifact directory; run `python -m pytest tests/test_edge_standard_layout.py -q`. It checks SMI consolidated/all named branches, RR/BBM/SFAB, actual PDF/XLSX downloads, exact spreadsheet row/value associations, branch visibility and pagination. It is an offline real-snapshot test, not proof of a fresh production login.
+
 ## Run
 
 ```bash

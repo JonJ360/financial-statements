@@ -15,12 +15,13 @@ def test_historical_company_mapping_order_and_sign():
     for code, order in ORDERS.items():
         company=next(c for c in sync.ACTIVE_COMPANIES if c.code==code)
         rows=[account(n,categories.get(n,35)) for n in dict.fromkeys(['601','602','603',*order,'701'])]
+        rows[0]['account_description']='PAYROLL'
         rows[1]['account_description']='FICA TAXES--'
         rows[2]['account_description']='WORKERS COMP & UNEMP--'
         original=copy.deepcopy(rows)
         result=sync._presentation(company,rows,[])['income_statement']
         employee=[r['account_number'] for r in result if r.get('parent_id')=='employee_related_expenses']
-        assert employee==['601-00-00','602-00-00']
+        assert employee==['601-00-00','602-00-00','603-00-00']
         other=[r for r in result if r.get('parent_id')=='other_operating_expenses']
         assert [r['account_number'] for r in other][:len(order)]==[n+'-00-00' for n in order]
         assert next(r for r in other if r['account_number']=='701-00-00')['values']['current_period']=='10.00000'
@@ -52,27 +53,37 @@ def test_real_snapshot_all_periods_and_shared_exports(tmp_path):
         if not statement['comparison']['available']:
             sync._mark_missing_comparison(presentation)
         old=statement['presentation']
-        assert presentation['balance_sheet']==old['balance_sheet']
+        old_balance={r['id']:r['values'] for r in old['balance_sheet'] if r['row_type']!='heading'}
+        new_balance={r['id']:r['values'] for r in presentation['balance_sheet'] if r['row_type']!='heading'}
+        for identifier, values in old_balance.items():
+            if code=='SMI' and identifier in {'property_plant_equipment','other_assets'}:
+                continue
+            old_row=next(r for r in old['balance_sheet'] if r['id']==identifier)
+            if old_row['row_type']=='account' and identifier not in new_balance:
+                # Only the SMI COOP STOCK section-derived ID may change.
+                assert code=='SMI' and 'COOP STOCK' in old_row['label']
+                new_row=next(r for r in presentation['balance_sheet'] if r.get('account_number')==old_row['account_number'] and r.get('parent_id')=='property_plant_equipment')
+                assert new_row['values']==values
+            else:
+                assert new_balance[identifier]==values
         old_net=next(r for r in old['income_statement'] if r['id']=='net_income')
         new_net=next(r for r in presentation['income_statement'] if r['id']=='net_income')
         assert new_net['values']==old_net['values']
-        if code not in ORDERS:
-            assert presentation==old
-        else:
-            changed+=1
-            before={r['account_number']:r['values'] for r in old['income_statement'] if r['row_type']=='account'}
-            after={r['account_number']:r['values'] for r in presentation['income_statement'] if r['row_type']=='account'}
-            assert before.keys()==after.keys()
-            for number,values in before.items():
-                old_row=next(r for r in old['income_statement'] if r.get('account_number')==number)
-                expected={k:None if v is None else sync._money(-sync.D(v)) for k,v in values.items()} if number=='701-00-00' and old_row.get('parent_id')=='other_income' else values
-                assert after[number]==expected
-            raw=[a for a in accounts if not a.get('synthetic')]
-            metrics=sync._statement_metrics(raw,code)
-            updated=copy.deepcopy(statement)
-            updated['presentation']=presentation
-            updated['kpis']['operating_expenses']=sync._money(metrics['operating_expenses'])
-            assert sync.validate_statement_bridge(updated)['passed']
+        changed+=1
+        before={r['account_number']:r for r in old['income_statement'] if r['row_type']=='account'}
+        after={r['account_number']:r for r in presentation['income_statement'] if r['row_type']=='account'}
+        assert before.keys()==after.keys()
+        for number,old_row in before.items():
+            values=old_row['values']
+            flip=old_row['parent_id']=='other_income' and after[number]['parent_id']=='other_operating_expenses'
+            expected={k:None if v is None else sync._money(-sync.D(v)) for k,v in values.items()} if flip else values
+            assert after[number]['values']==expected
+        raw=[a for a in accounts if not a.get('synthetic')]
+        metrics=sync._statement_metrics(raw,code)
+        updated=copy.deepcopy(statement)
+        updated['presentation']=presentation
+        updated['kpis']['operating_expenses']=sync._money(metrics['operating_expenses'])
+        assert sync.validate_statement_bridge(updated)['passed']
         # Raw snapshot stays untouched; exercise the generated rows, not stale stored layout.
         period['payload']['statement']['presentation']=presentation
     generated=tmp_path/'layout.json'
@@ -132,7 +143,7 @@ def test_real_snapshot_full_builder_controls_and_trends():
             assert new['income_statement']==old['income_statement']
             assert new['balance_sheet']==old['balance_sheet']
             for key,value in old['kpis'].items():
-                if key!='operating_expenses' or company.code not in ORDERS:
+                if key!='operating_expenses':
                     assert new['kpis'][key]==value
             for trend in new['trend']:
                 raw=rows[(trend['fiscal_year'],trend['fiscal_period'])]

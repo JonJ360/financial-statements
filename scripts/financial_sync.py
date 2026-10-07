@@ -19,7 +19,7 @@ D = decimal.Decimal
 ZERO = D("0.00000")
 CONTROL_TOLERANCE = D("0.01")
 MIN_FISCAL_YEAR = 2020
-MAPPING_VERSION = "3.2.0"
+MAPPING_VERSION = "4.0.0"
 CONTROL_VERSION = "1.1.0"
 MAIN_SERVER = "192.168.1.25,49934"
 SMI_SERVER = "192.168.1.25,50497"
@@ -57,8 +57,7 @@ IS_CATEGORIES = frozenset({31, 32, 33, 35, 36, 37, 38, 39, 40, 42, 43})
 NONFINANCIAL_CATEGORIES = frozenset({48})
 EMPLOYEE_TERMS = (
     "PAYROLL", "FICA", "WAGES", "SALARIES", "WORKERS COMP", "WORKER'S COMP",
-    "UNEMPLOYMENT", "PROFIT SHARING", "OFFICE STAFF", "HUMAN RESOURCES",
-    "HEALTH INSURANCE",
+    "UNEMPLOYMENT", "COMMISSIONS",
 )
 # June 2026 statements sent July 17 govern these two presentation profiles.
 # Account numbers are exact GP keys, not prefixes or description heuristics.
@@ -72,12 +71,10 @@ HISTORICAL_INCOME_LAYOUTS = {
         "labels": {"610": "HEAT LIGHTS ETC", "621": "TRAVEL AND TRAINING", "622": "WAREHOUSE EXPENSE--", "623": "INTEREST", "665": "CONSULTING EXPENSE", "701": "DISCOUNT EARNED"},
     },
 }
-HISTORICAL_EMPLOYEE_ACCOUNTS = frozenset({"601-00-00", "602-00-00", "601-00-02", "602-00-02"})
-HISTORICAL_OTHER_ACCOUNTS = frozenset({"603-00-00", "606-00-00", "623-00-00", "660-00-00", "680-00-00", "701-00-00"})
 MAPPING_SPEC = {
     "historical_income_layouts": HISTORICAL_INCOME_LAYOUTS,
-    "historical_employee_accounts": sorted(HISTORICAL_EMPLOYEE_ACCOUNTS),
-    "historical_other_accounts": sorted(HISTORICAL_OTHER_ACCOUNTS),
+    "standard_layout": "SMI common headings, subtotals, contra-expense signs; all active companies",
+    "smi_branches": {"segment": "last", "00": "Fargo", "01": "Grand Forks", "02": "Fergus Falls", "03": "Bismarck", "allocation": "none"},
     "balance_sheet_categories": sorted(BS_CATEGORIES),
     "income_statement_categories": sorted(IS_CATEGORIES),
     "nonfinancial_categories": sorted(NONFINANCIAL_CATEGORIES),
@@ -92,23 +89,16 @@ MAPPING_SPEC = {
         "notes_payable_officer": "current_liabilities",
         "notes_payable_bank": "long_term_liabilities",
         "unrealized_gain": "equity",
+        "SMI_coop_stock": "property_plant_equipment",
     },
-    "income_sections": {
-        "revenue": [31, 32], "cost_of_revenue": [33],
-        "employee_related_expenses": [36, 37],
-        "other_operating_expenses": [35, 40], "other_expense": [38],
-        "income_tax": [39], "other_income": [43],
-    },
+    "income_sections": {"revenue": [31, 32], "cost_of_revenue": [33]},
     "income_description_rules": {
         "discounts_given": "cost_of_revenue",
-        "category_39_income_tax_description": "income_tax",
-        "category_39_employee_terms": list(EMPLOYEE_TERMS),
-        "category_39_default": "other_operating_expenses",
         "category_37_draw_or_distribution": "equity_distribution",
-        "category_42_income_tax_description": "income_tax",
-        "category_42_employee_terms": list(EMPLOYEE_TERMS),
-        "category_42_gain_or_loss_on_sale": "other_expense",
-        "category_42_default": "other_operating_expenses",
+        "income_tax_description": "income_tax",
+        "employee_terms": list(EMPLOYEE_TERMS),
+        "other_terms": ["OFFICE STAFF", "OFFICE EXPENSE", "HUMAN RESOURCES", "INTEREST", "INSURANCE EMPLOYEE", "HEALTH INSURANCE", "PROFIT SHARING", "PROFITSHARING"],
+        "other_non_revenue_default": "other_operating_expenses",
     },
     "account_display_amount": "SQL ytd totals already include period-zero opening; balance-sheet debit-less-credit for assets and credit-less-debit for liabilities/equity",
     "synthetic_current_earnings": "income-statement SQL ytd debit-less-credit, excluding equity distributions, reversed into equity display sign; SQL ytd already includes period-zero opening",
@@ -478,14 +468,8 @@ def _validate_accounts(accounts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _income_section(row: Mapping[str, Any], company_code: str | None = None) -> str:
-    if company_code in HISTORICAL_INCOME_LAYOUTS:
-        number = str(row.get("account_number") or "")
-        if number in HISTORICAL_EMPLOYEE_ACCOUNTS:
-            return "employee_related_expenses"
-        if number in HISTORICAL_OTHER_ACCOUNTS:
-            return "other_operating_expenses"
-        section = _income_section(row)
-        return "other_operating_expenses" if section == "employee_related_expenses" else section
+    # Categories establish revenue/cost/distribution ownership; expense grouping
+    # follows account meaning, never a numerical chart borrowed from another entity.
     category = int(row["category_id"])
     description = str(row.get("account_description") or "").upper()
     if category == 32 and "DISCOUNTS GIVEN" in description:
@@ -496,28 +480,18 @@ def _income_section(row: Mapping[str, Any], company_code: str | None = None) -> 
         return "cost_of_revenue"
     if category == 37 and any(term in description for term in ("DRAW", "DISTRIBUTION")):
         return "equity_distribution"
-    if category in (36, 37):
-        return "employee_related_expenses"
-    if category in (35, 40):
-        return "other_operating_expenses"
-    if category == 38:
-        return "other_expense"
-    if category == 39:
+    if category in IS_CATEGORIES:
         if "INCOME TAX" in description:
             return "income_tax"
+        if any(term in description for term in (
+            "OFFICE STAFF", "OFFICE EXPENSE", "HUMAN RESOURCES", "INTEREST",
+            "INSURANCE EMPLOYEE", "HEALTH INSURANCE", "PROFIT SHARING", "PROFITSHARING",
+        )):
+            return "other_operating_expenses"
         if any(re.search(rf"\b{re.escape(term)}\b", description) for term in EMPLOYEE_TERMS):
             return "employee_related_expenses"
+        # Template other income is contra-expense (raw debit minus credit).
         return "other_operating_expenses"
-    if category == 42:
-        if "INCOME TAX" in description:
-            return "income_tax"
-        if any(re.search(rf"\b{re.escape(term)}\b", description) for term in EMPLOYEE_TERMS):
-            return "employee_related_expenses"
-        if any(term in description for term in ("LOSS/GAIN ON SALE", "GAIN ON SALE", "LOSS ON SALE")):
-            return "other_expense"
-        return "other_operating_expenses"
-    if category == 43:
-        return "other_income"
     raise SourceValidationError(
         f"unmapped income-statement category {category}: {description}"
     )
@@ -528,7 +502,7 @@ def _income_amount(row: Mapping[str, Any], prefix: str, company_code: str | None
     return -amount if _income_section(row, company_code) in ("revenue", "other_income") else amount
 
 
-def _balance_section(row: Mapping[str, Any]) -> str:
+def _balance_section(row: Mapping[str, Any], company_code: str | None = None) -> str:
     category = int(row["category_id"])
     description = str(row.get("account_description") or "").upper()
     if category == 1:
@@ -542,6 +516,8 @@ def _balance_section(row: Mapping[str, Any]) -> str:
     if category == 11:
         return "intangible_assets"
     if category == 12:
+        if company_code == "SMI" and "COOP STOCK" in description:
+            return "property_plant_equipment"
         return "other_assets"
     if category in (13, 16):
         return "current_liabilities"
@@ -581,7 +557,7 @@ def _account_rows(
     current: list[dict[str, Any]], prior: list[dict[str, Any]], section: str,
     *, consolidate_smi: bool, balance_sheet: bool, company_code: str | None = None,
 ) -> list[dict[str, Any]]:
-    classify = _balance_section if balance_sheet else lambda row: _income_section(row, company_code)
+    classify = (lambda row: _balance_section(row, company_code)) if balance_sheet else lambda row: _income_section(row, company_code)
     current_groups: dict[str, list[dict[str, Any]]] = {}
     prior_groups: dict[str, list[dict[str, Any]]] = {}
     for row in current:
@@ -615,7 +591,7 @@ def _account_rows(
             "level": 2 if balance_sheet else 1,
             "label": label or number,
             "account_number": number, "values": {key: _money(value) for key, value in values.items()},
-            "detail": current_detail if consolidate_smi else [],
+            "detail": current_detail, "prior_detail": prior_detail,
         })
     return result
 
@@ -635,7 +611,7 @@ def _presentation(
         ("employee_related_expenses", "Employee-Related Expenses"),
         ("other_operating_expenses", "Other Operating Expenses"),
         ("other_income", "Other Income"), ("other_expense", "Other Expense"),
-        ("income_tax", "Income Tax"),
+        ("income_tax", "Income Tax Expense"),
     )
     section_rows: dict[str, dict[str, Any]] = {}
     children: dict[str, list[dict[str, Any]]] = {}
@@ -671,75 +647,45 @@ def _presentation(
     net_income = income_total("net_income", "Net Income", {
         key: _decimal(pretax["values"][key]) - value("income_tax", key) for key in income_keys
     })
-    income_rows = []
-    for identifier in ("revenue", "cost_of_revenue"):
-        income_rows.extend((section_rows[identifier], *children[identifier]))
-    income_rows.append(gross)
-    for identifier in ("employee_related_expenses", "other_operating_expenses"):
-        if children[identifier]:
-            income_rows.extend((section_rows[identifier], *children[identifier]))
-    income_rows.extend((operating_expenses, operations))
-    for identifier in ("other_income", "other_expense"):
-        if children[identifier]:
-            income_rows.extend((section_rows[identifier], *children[identifier]))
-    income_rows.append(pretax)
-    if children["income_tax"]:
-        income_rows.extend((section_rows["income_tax"], *children["income_tax"]))
-    income_rows.append(net_income)
-
     profile = HISTORICAL_INCOME_LAYOUTS.get(company.code)
     if profile:
-        # Unknown/new accounts remain visible after the authoritative ordered rows.
+        # Keep company-specific detail order/labels, not obsolete employee mappings.
         order = {number + "-00-00": index for index, number in enumerate(profile["other_order"])}
-        other = children["other_operating_expenses"]
-        other.sort(key=lambda row: (order.get(row["account_number"], len(order)), row["account_number"]))
-        for identifier in children:
-            for row in children[identifier]:
-                labels = {number + "-00-00": label for number, label in profile["labels"].items()}
+        children["other_operating_expenses"].sort(
+            key=lambda row: (order.get(row["account_number"], len(order)), row["account_number"]))
+        labels = {number + "-00-00": label for number, label in profile["labels"].items()}
+        for rows in children.values():
+            for row in rows:
                 row["label"] = labels.get(row["account_number"], row["label"])
-        section_rows["income_tax"]["label"] = "Income Tax Expense"
-        if company.code == "RRCOF":
-            section_rows["other_operating_expenses"]["label"] = "Other Operating Expense"
-            pretax["label"] = "Income(Loss) Before Tax"
-            net_income["label"] = "INCOME (LOSS)"
-        else:
-            operations["label"] = "Income (Loss) from Operations"
-            pretax["label"] = "Income(Loss) Before Taxes"
-            net_income["label"] = "Income(Loss)"
-        income_rows = []
-        def append_section(identifier: str) -> None:
-            section = section_rows[identifier]
-            income_rows.append({"id": identifier + "_heading", "parent_id": None,
-                                "row_type": "heading", "level": 0,
-                                "label": section["label"], "values": {}})
-            income_rows.extend((section, *children[identifier]))
-        for identifier in ("revenue", "cost_of_revenue"):
-            append_section(identifier)
-        income_rows.extend((gross, {"id": "operating_expenses_heading", "parent_id": None,
-                                   "row_type": "heading", "level": 0,
-                                   "label": "Operating Expenses:", "values": {}}))
-        for identifier in ("employee_related_expenses", "other_operating_expenses"):
-            if children[identifier]:
-                append_section(identifier)
-        income_rows.append(operating_expenses)
-        if company.code == "BBMTS":
-            income_rows.append(operations)
-        for identifier in ("other_income", "other_expense"):
-            if children[identifier]:
-                append_section(identifier)
-        income_rows.append(pretax)
-        if children["income_tax"]:
-            append_section("income_tax")
-        income_rows.append(net_income)
+    operations["label"] = "Income(Loss) from Operations"
+    pretax["label"] = "Income(Loss) Before Taxes"
+    net_income["label"] = "Income(Loss)"
+    income_rows = []
+    def append_section(identifier: str) -> None:
+        section = section_rows[identifier]
+        income_rows.append({"id": identifier + "_heading", "parent_id": None,
+                            "row_type": "heading", "level": 0,
+                            "label": section["label"], "values": {}})
+        income_rows.extend((section, *children[identifier]))
+    for identifier in ("revenue", "cost_of_revenue"):
+        append_section(identifier)
+    income_rows.extend((gross, {"id": "operating_expenses_heading", "parent_id": None,
+                               "row_type": "heading", "level": 0,
+                               "label": "Operating Expenses", "values": {}}))
+    for identifier in ("employee_related_expenses", "other_operating_expenses"):
+        append_section(identifier)
+    income_rows.extend((operating_expenses, operations, pretax))
+    append_section("income_tax")
+    income_rows.append(net_income)
 
     balance_keys = ("current_balance", "prior_balance")
     balance_sections = (
-        ("cash", "Cash"), ("current_assets", "Current Assets"),
-        ("property_plant_equipment", "Property, Plant & Equipment"),
+        ("cash", "Cash and Short Term Investments"), ("current_assets", "Current Assets"),
+        ("property_plant_equipment", "Plant, Property & Equipment"),
         ("accumulated_depreciation", "Accumulated Depreciation"),
         ("intangible_assets", "Intangible Assets"), ("other_assets", "Other Assets"),
         ("current_liabilities", "Current Liabilities"),
-        ("long_term_liabilities", "Long-Term Liabilities"), ("equity", "Equity"),
+        ("long_term_liabilities", "Long-Term Liabilities"), ("equity", "Stockholders' Equity"),
         ("equity_distributions", "Partner Distributions"),
         ("current_earnings", "Current Earnings"),
     )
@@ -747,7 +693,7 @@ def _presentation(
     bs_children: dict[str, list[dict[str, Any]]] = {}
     for identifier, label in balance_sections:
         bs_children[identifier] = _account_rows(
-            current, prior, identifier, consolidate_smi=consolidate, balance_sheet=True,
+            current, prior, identifier, consolidate_smi=consolidate, balance_sheet=True, company_code=company.code,
         )
         bs_sections[identifier] = {
             "id": identifier, "parent_id": "assets" if identifier in {"cash", "current_assets", "property_plant_equipment", "accumulated_depreciation", "intangible_assets", "other_assets"} else ("liabilities" if "liabilities" in identifier else "equity_and_earnings"),
@@ -763,23 +709,27 @@ def _presentation(
                 "label": label, "values": {key: _money(sum((_decimal(bs_sections[item]["values"][key]) for item in identifiers), ZERO)) for key in balance_keys}}
     total_assets = bs_total("total_assets", "Total Assets", asset_ids)
     total_liabilities = bs_total("total_liabilities", "Total Liabilities", liability_ids)
-    total_equity = bs_total("total_equity", "Total Equity", equity_ids)
+    total_equity = bs_total("total_equity", "Total Stockholders' Equity", equity_ids)
     total_le = {"id": "total_liabilities_and_equity", "parent_id": None, "row_type": "subtotal", "level": 0,
-                "label": "Total Liabilities & Equity", "values": {
+                "label": "Total Liabilities and Stockholders' Equity", "values": {
                     key: _money(_decimal(total_liabilities["values"][key]) + _decimal(total_equity["values"][key]))
                     for key in balance_keys}}
-    balance_rows = [{"id": "assets", "parent_id": None, "row_type": "heading", "level": 0, "label": "Assets", "values": total_assets["values"]}]
+    balance_rows = [{"id": "assets", "parent_id": None, "row_type": "heading", "level": 0, "label": "Assets", "values": {}}]
+    def append_balance_section(identifier: str) -> None:
+        section = bs_sections[identifier]
+        balance_rows.append({"id": identifier + "_heading", "parent_id": section["parent_id"],
+                             "row_type": "heading", "level": 1, "label": section["label"], "values": {}})
+        balance_rows.extend((section, *bs_children[identifier]))
     for identifier in asset_ids:
-        if bs_children[identifier]:
-            balance_rows.extend((bs_sections[identifier], *bs_children[identifier]))
-    balance_rows.extend((total_assets, {"id": "liabilities", "parent_id": None, "row_type": "heading", "level": 0, "label": "Liabilities", "values": total_liabilities["values"]}))
+        if bs_children[identifier] or identifier in {"cash", "current_assets", "property_plant_equipment", "accumulated_depreciation"}:
+            append_balance_section(identifier)
+    balance_rows.extend((total_assets, {"id": "liabilities", "parent_id": None, "row_type": "heading", "level": 0, "label": "Liabilities and Stockholders' Equity", "values": {}}))
     for identifier in liability_ids:
-        if bs_children[identifier]:
-            balance_rows.extend((bs_sections[identifier], *bs_children[identifier]))
-    balance_rows.extend((total_liabilities, {"id": "equity_and_earnings", "parent_id": None, "row_type": "heading", "level": 0, "label": "Equity", "values": total_equity["values"]}))
+        append_balance_section(identifier)
+    balance_rows.append(total_liabilities)
     for identifier in equity_ids:
-        if bs_children[identifier]:
-            balance_rows.extend((bs_sections[identifier], *bs_children[identifier]))
+        if bs_children[identifier] or identifier == "equity":
+            append_balance_section(identifier)
     balance_rows.extend((total_equity, total_le))
     return {"income_statement": income_rows, "balance_sheet": balance_rows}
 
@@ -871,9 +821,69 @@ def validate_statement_bridge(statement: Mapping[str, Any]) -> dict[str, Any]:
     return {"passed": True, **{key: _money(value) for key, value in bridges.items()}}
 
 
+SMI_BRANCHES = {"00": "Fargo", "01": "Grand Forks", "02": "Fergus Falls", "03": "Bismarck"}
+BRANCH_NOTE = ("Branch balances are unallocated GP account balances, not standalone legal-entity "
+               "balance sheets. Central cash, receivables, liabilities and equity remain in their "
+               "recorded branch; no allocation or balancing plug is applied.")
+
+
+def _branch_code(row: Mapping[str, Any]) -> str:
+    number = str(row.get("account_number") or "")
+    if not re.fullmatch(r"[^-]+-[^-]+-[^-]+", number):
+        raise SourceValidationError(f"SMI branch account must have three segments: {number}")
+    return number.rsplit("-", 1)[1]
+
+
+def _branch_statements(
+    company: CompanyConfig, current: list[dict[str, Any]], prior: list[dict[str, Any]],
+    history: list[list[dict[str, Any]]], periods: list[Mapping[str, Any]], comparison_available: bool,
+) -> dict[str, Any]:
+    if company.code != "SMI":
+        return {}
+    codes = sorted(set(SMI_BRANCHES) | {_branch_code(row) for row in current + prior})
+    branches = {}
+    for code in codes:
+        selected = [row for row in current if _branch_code(row) == code]
+        previous = [row for row in prior if _branch_code(row) == code]
+        metrics = _statement_metrics(selected, company.code)
+        presentation = _presentation(company, _with_current_earnings(selected), _with_current_earnings(previous))
+        if not comparison_available:
+            _mark_missing_comparison(presentation)
+        trend = []
+        for period, accounts in zip(periods, history):
+            values = _statement_metrics([row for row in accounts if _branch_code(row) == code], company.code)
+            trend.append({"fiscal_year": int(period["year"]), "fiscal_period": int(period["period"]),
+                          **{key: _money(values[key]) for key in (
+                              "revenue", "cost_of_goods_sold", "gross_profit", "operating_expenses", "net_income")}})
+        statement = {
+            "branch_code": code, "branch_name": SMI_BRANCHES.get(code, f"Other account segment {code}"),
+            "selectable": code in SMI_BRANCHES or any(
+                _decimal(row.get(key, 0)) != ZERO for row in selected + previous
+                for key in ("period_debit", "period_credit", "ytd_debit", "ytd_credit")),
+            "scope_note": BRANCH_NOTE,
+            "income_statement": [row for row in selected if row["posting_type"] == 1],
+            "balance_sheet": [row for row in _with_current_earnings(selected) if row["posting_type"] == 0],
+            "presentation": presentation,
+            "comparison": {"available": comparison_available},
+            "kpis": {key: _money(metrics[key]) for key in (
+                "revenue", "cost_of_goods_sold", "gross_profit", "operating_expenses", "net_income", "assets", "liabilities", "equity")},
+            "trend": trend,
+            "balance_sheet_difference": _money(metrics["assets"] - metrics["liabilities"] - metrics["equity"]),
+        }
+        statement["bridge_controls"] = validate_statement_bridge(statement)
+        branches[code] = statement
+    totals = _statement_metrics(current, company.code)
+    for key in next(iter(branches.values()))["kpis"]:
+        if sum((_decimal(branch["kpis"][key]) for branch in branches.values()), ZERO) != totals[key]:
+            raise SourceValidationError(f"SMI branch-to-company bridge failed: {key}")
+    return branches
+
+
 def _period_payload(
     company: CompanyConfig, period: Mapping[str, Any], accounts: list[dict[str, Any]],
     trend: list[dict[str, Any]], prior_accounts: list[dict[str, Any]] | None = None,
+    branch_history: list[list[dict[str, Any]]] | None = None,
+    branch_periods: list[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     is_rows = [row for row in accounts if row["posting_type"] == 1]
     bs_rows = _with_current_earnings([row for row in accounts if row["posting_type"] == 0] + is_rows)
@@ -903,6 +913,9 @@ def _period_payload(
         },
     }
     statement["bridge_controls"] = validate_statement_bridge(statement)
+    if company.code == "SMI":
+        statement["branches"] = _branch_statements(
+            company, accounts, prior_accounts, branch_history or [], branch_periods or [], bool(prior_accounts))
     payload = {
         "company_code": company.code, "company_name": company.name,
         "fiscal_year": int(period["year"]), "fiscal_period": int(period["period"]),
@@ -969,6 +982,8 @@ def build_company_payloads(
         _period_payload(
             company, period, mapped[(int(period["year"]), int(period["period"]))], trend[:index+1],
             mapped.get((int(period["year"])-1, int(period["period"])), []),
+            [mapped[(int(p["year"]), int(p["period"]))] for p in periods[:index+1]] if company.code == "SMI" else [],
+            periods[:index+1] if company.code == "SMI" else [],
         )
         for index, period in enumerate(periods)
     ]

@@ -144,8 +144,8 @@ class MappingAndPayloadTests(unittest.TestCase):
         self.assertEqual("34.00000", income["net_income"]["values"]["current_ytd"])
         self.assertEqual("17.00000", income["net_income"]["values"]["prior_ytd"])
         self.assertEqual("20.00000", income["employee_related_expenses"]["values"]["current_period"])
-        self.assertEqual("5.00000", income["other_operating_expenses"]["values"]["current_period"])
-        self.assertEqual("2.00000", income["other_income"]["values"]["current_period"])
+        self.assertEqual("3.00000", income["other_operating_expenses"]["values"]["current_period"])
+        self.assertNotIn("other_income", income)
         self.assertEqual("100.00000", balance["total_assets"]["values"]["current_balance"])
         self.assertEqual("50.00000", balance["total_assets"]["values"]["prior_balance"])
         self.assertEqual("100.00000", balance["total_liabilities_and_equity"]["values"]["current_balance"])
@@ -154,7 +154,7 @@ class MappingAndPayloadTests(unittest.TestCase):
 
     def test_smi_units_consolidate_by_base_account_and_preserve_detail(self):
         period = {"year": 2026, "period": 5, "start": dt.date(2026, 5, 1), "end": dt.date(2026, 5, 31)}
-        rows = self.lender_rows("0.5", "-00") + self.lender_rows("0.5", "-01")
+        rows = self.lender_rows("0.5", "-00-00") + self.lender_rows("0.5", "-00-01")
         payload = build_company_payloads(
             CompanyConfig("SMI", "SMI", "server", "SMI"), [period], {(2026, 5): rows}
         )[0]["payload"]
@@ -164,7 +164,7 @@ class MappingAndPayloadTests(unittest.TestCase):
         self.assertEqual(1, len(revenue_accounts))
         self.assertEqual("4000", revenue_accounts[0]["account_number"])
         self.assertEqual("100.00000", revenue_accounts[0]["values"]["current_period"])
-        self.assertEqual({"4000-00", "4000-01"}, {row["account_number"] for row in revenue_accounts[0]["detail"]})
+        self.assertEqual({"4000-00-00", "4000-00-01"}, {row["account_number"] for row in revenue_accounts[0]["detail"]})
         self.assertEqual(20, len(payload["statement"]["income_statement"] + payload["statement"]["balance_sheet"]) - 1)
 
     def test_presentation_suppresses_zero_only_accounts_and_cleans_gp_labels(self):
@@ -202,17 +202,17 @@ class MappingAndPayloadTests(unittest.TestCase):
         self.assertEqual("revenue", _income_section(row(32, "SALES RETURNS")))
         self.assertEqual("cost_of_revenue", _income_section(row(32, "DISCOUNTS GIVEN")))
         self.assertEqual("employee_related_expenses", _income_section(row(36, "COMMISSIONS")))
-        self.assertEqual("employee_related_expenses", _income_section(row(37, "RETIREMENT BENEFITS")))
+        self.assertEqual("other_operating_expenses", _income_section(row(37, "RETIREMENT BENEFITS")))
         self.assertEqual("equity_distribution", _income_section(row(37, "PARTNER DRAW")))
-        self.assertEqual("other_expense", _income_section(row(38, "INTEREST EXPENSE")))
+        self.assertEqual("other_operating_expenses", _income_section(row(38, "INTEREST EXPENSE")))
         self.assertEqual("income_tax", _income_section(row(39, "INCOME TAX EXPENSE")))
         self.assertEqual("employee_related_expenses", _income_section(row(39, "FICA TAXES")))
         self.assertEqual("other_operating_expenses", _income_section(row(39, "REAL ESTATE TAXES")))
-        self.assertEqual("other_income", _income_section(row(43, "INTEREST INCOME")))
+        self.assertEqual("other_operating_expenses", _income_section(row(43, "INTEREST INCOME")))
         self.assertEqual("employee_related_expenses", _income_section(row(42, "SALARIES & WAGES--MAIN")))
-        self.assertEqual("employee_related_expenses", _income_section(row(42, "EMPLOYEE HEALTH INSURANCE")))
+        self.assertEqual("other_operating_expenses", _income_section(row(42, "EMPLOYEE HEALTH INSURANCE")))
         self.assertEqual("income_tax", _income_section(row(42, "INCOME TAX EXPENSE")))
-        self.assertEqual("other_expense", _income_section(row(42, "LOSS/GAIN ON SALE OF ASSETS")))
+        self.assertEqual("other_operating_expenses", _income_section(row(42, "LOSS/GAIN ON SALE OF ASSETS")))
         self.assertEqual("other_operating_expenses", _income_section(row(42, "ADVERTISING & MARKETING")))
 
     def test_unclosed_income_statement_opening_balance_flows_to_current_earnings(self):

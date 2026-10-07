@@ -76,14 +76,15 @@
         fitToWidth: 1, fitToHeight: 0,
         margins: { left: 0.35, right: 0.35, top: 0.55, bottom: 0.55, header: 0.2, footer: 0.2 }
       },
-      views: [{ state: 'frozen', xSplit: 1, ySplit: 6, topLeftCell: 'B7', activeCell: 'B7' }]
+      views: [{ state: 'normal' }]
     });
     sheet.headerFooter.oddFooter = '&LConfidential&C&A&RPage &P of &N';
     sheet.columns = [{ width: 48 }, ...spec.keys.map(() => ({ width: 18 }))];
     sheet.addRow([safeText(report.meta.company_name)]);
     sheet.addRow([spec.title]);
     sheet.addRow([spec.subtitle]);
-    sheet.addRow(['Accrual Basis · Unaudited']);
+    sheet.addRow([report.scope_note || 'Accrual Basis · Unaudited']);
+    if (report.scope_note) { sheet.getRow(4).height = 44; sheet.getCell('A4').alignment = { wrapText: true, vertical: 'middle' }; }
     const recon = monthlyReconStatus(report.monthly_recon);
     sheet.addRow([`${recon.completed ? '☑' : '☐'} Monthly recon completed · ${month} ${report.meta.fiscal_year} · ${recon.explanation} Read-only GP status.`]);
     sheet.mergeCells(5, 1, 5, spec.headers.length);
@@ -154,12 +155,32 @@
     workbook.calcProperties.forceFullCalc = true;
     styleStatement(workbook, report, 'income', month);
     const balance = styleStatement(workbook, report, 'balance', month);
+    const detail = workbook.addWorksheet('Account Detail', { views: [{ state: 'normal' }] });
+    detail.columns = [{width:24},{width:20},{width:18},{width:46}, ...Array.from({length:4},()=>({width:19}))];
+    detail.addRow([safeText(report.meta.company_name)]);
+    detail.addRow(['Raw GP debit/credit, not statement display signs. Current and prior-year account detail.']);
+    detail.addRow(['Statement','Comparison','Account','Description','Period debit','Period credit','YTD debit','YTD credit']);
+    for (const [type, rows] of [['Income',report.income],['Balance',report.balance]]) {
+      for (const comparison of ['Current','Prior year']) {
+        const seen = new Set();
+        for (const row of rows || []) for (const raw of (comparison==='Current'?row.detail:row.prior_detail)||[]) {
+          if(seen.has(raw.account_number)) continue;
+          seen.add(raw.account_number);
+          detail.addRow([type,comparison,safeText(raw.account_number),safeText(raw.account_description),
+            ...['period_debit','period_credit','ytd_debit','ytd_credit'].map(key=>raw[key]==null?null:Number(raw[key]))]);
+        }
+      }
+    }
+    detail.getRow(3).font = { bold: true };
+    detail.autoFilter = { from:'A3',to:`H${Math.max(3,detail.rowCount)}` };
+    for(let column=5;column<=8;column++) detail.getColumn(column).numFmt = CURRENCY_FORMAT;
+    detail.pageSetup = { orientation:'landscape',paperSize:1,fitToPage:true,fitToWidth:1,fitToHeight:0,printTitlesRow:'1:3' };
     const controls = workbook.addWorksheet('Controls', { state: 'hidden' });
     controls.state = 'hidden';
     controls.addRow(['Control', 'Variance']);
     const assets = balance.rowNumbers.total_assets;
     const liabilitiesEquity = balance.rowNumbers.total_liabilities_and_equity;
-    controls.addRow(['Current Assets = Liabilities & Equity', { formula: `'Balance Sheet'!B${assets}-'Balance Sheet'!B${liabilitiesEquity}` }]);
+    controls.addRow([report.meta.branch_code ? 'Unallocated branch difference — no balancing plug' : 'Current Assets = Liabilities & Equity', { formula: `'Balance Sheet'!B${assets}-'Balance Sheet'!B${liabilitiesEquity}` }]);
     controls.addRow(['Prior Assets = Liabilities & Equity', { formula: `'Balance Sheet'!C${assets}-'Balance Sheet'!C${liabilitiesEquity}` }]);
     controls.getColumn(2).numFmt = CURRENCY_FORMAT;
     return workbook;
