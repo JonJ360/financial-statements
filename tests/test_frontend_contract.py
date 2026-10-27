@@ -57,7 +57,7 @@ def test_single_page_has_required_financial_statement_controls():
     visible_text = " ".join(parsed.text)
     for label in (
         "Financial Statements", "Income Statement", "Balance Sheet",
-        "Download Excel", "Download PDF", "V2.9",
+        "Download Excel", "Download PDF", "V2.10",
     ):
         assert label in visible_text
 
@@ -285,8 +285,8 @@ def test_pdf_export_has_lender_headers_repeating_columns_and_page_numbers():
     html = source()
     assert "orientation:'portrait'" in html
     assert "showHead:'everyPage'" in html
-    assert "Accrual Basis" in html
-    assert "Unaudited" in html
+    assert "Accrual Basis" not in html
+    assert "Unaudited" not in html
     assert "Page ${page} of ${pages}" in html
     assert "putTotalPages" not in html
     assert "rowPageBreak:'avoid'" in html

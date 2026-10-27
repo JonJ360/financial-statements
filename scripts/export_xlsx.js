@@ -83,10 +83,10 @@
     sheet.addRow([safeText(report.meta.company_name)]);
     sheet.addRow([spec.title]);
     sheet.addRow([spec.subtitle]);
-    sheet.addRow([report.scope_note || 'Accrual Basis · Unaudited']);
+    sheet.addRow([report.scope_note || '']);
     if (report.scope_note) { sheet.getRow(4).height = 44; sheet.getCell('A4').alignment = { wrapText: true, vertical: 'middle' }; }
     const recon = monthlyReconStatus(report.monthly_recon);
-    sheet.addRow([`${recon.completed ? '☑' : '☐'} Monthly recon completed · ${month} ${report.meta.fiscal_year} · ${recon.explanation} Read-only GP status.`]);
+    sheet.addRow([`${recon.completed ? '☑' : '☐'} Monthly recon completed · ${month} ${report.meta.fiscal_year}`]);
     sheet.mergeCells(5, 1, 5, spec.headers.length);
     sheet.getCell('A5').alignment = { horizontal: 'right', vertical: 'middle', wrapText: true };
     sheet.getCell('A5').font = { name: 'Arial', size: 8, color: { argb: COLORS.muted } };

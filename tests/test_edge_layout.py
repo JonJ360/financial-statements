@@ -42,7 +42,8 @@ def test_edge_statement_layout_and_downloads():
         expected_status = payload.get('monthly_recon', {}).get('status', 'unknown')
         assert page.locator('#monthlyRecon').is_checked() == (expected_status == 'completed')
         assert page.locator('#monthlyRecon').is_disabled()
-        assert expected_status.capitalize() in page.locator('#monthlyReconNote').inner_text()
+        assert expected_status.capitalize() not in page.locator('#monthlyReconNote').inner_text()
+        assert not any(label in page.locator('body').inner_text() for label in ['Accrual Basis', 'Unaudited', 'GP fiscal-period'])
         page.evaluate("window.scrollTo(0,document.getElementById('statements').getBoundingClientRect().top+window.scrollY-105)")
         page.screenshot(path=str(output / 'income.png'))
         for type_, body in [('income', '#incomeBody'), ('balance', '#balanceBody')]:
@@ -63,6 +64,15 @@ def test_edge_statement_layout_and_downloads():
                 page.click(button)
             download.value.save_as(str(output/name))
             assert (output/name).stat().st_size > 1000
+            if name.endswith('.pdf'):
+                import fitz
+                with fitz.open(output/name) as pdf:
+                    exported_text = '\n'.join(p.get_text() for p in pdf)
+            else:
+                from openpyxl import load_workbook
+                wb = load_workbook(output/name)
+                exported_text = '\n'.join(str(c.value or '') for sheet in wb for row in sheet for c in row)
+            assert not any(label in exported_text for label in ['Accrual Basis', 'Unaudited', 'GP fiscal-period', 'Read-only GP status'])
         for status in ['completed','open','mixed','unknown']:
             page.evaluate("""status=>{state.report.monthly_recon={status,completed:status==='completed',basis:'GP fiscal-period module closure'};renderMonthlyRecon()}""",status)
             assert page.locator('#monthlyRecon').is_checked() == (status=='completed')

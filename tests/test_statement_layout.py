@@ -77,9 +77,9 @@ assert.equal(status.status,expected);assert.equal(status.completed,expected==='c
 const boxes=[],marks=[];const doc={setFontSize(){},setDrawColor(){},setLineWidth(){},rect(...args){boxes.push(args)},line(...args){marks.push(args)},text(){},splitTextToSize(t){return [t]},getTextWidth(){return 100}};
 state.report=report;drawPdfRecon(doc);assert.equal(boxes[0][0],42,'PDF checkbox inside portrait left margin');assert.equal(marks.length,expected==='completed'?2:0);
 state.report=report;renderMonthlyRecon();assert.equal($('monthlyRecon').checked,expected==='completed');
-assert($('monthlyReconNote').textContent.includes(status.explanation));
+assert(!$('monthlyReconNote').textContent.includes(status.explanation));
 const wb=FinancialWorkbook.buildFinancialWorkbook(report,{month:'May'});
-for(const name of ['Income Statement','Balance Sheet']) assert(wb.getWorksheet(name).getCell('A5').value.includes(status.explanation));
+for(const name of ['Income Statement','Balance Sheet']) {const text=wb.getWorksheet(name).getColumn(1).values.join(' ');assert(!text.includes(status.explanation));assert(!/Accrual Basis|Unaudited/.test(text));}
 }
 assert(html.includes('drawPdfRecon(doc'));
 clearReportOnly();assert.equal($('monthlyRecon').checked,false);
