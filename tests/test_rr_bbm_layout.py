@@ -35,7 +35,8 @@ def test_real_snapshot_all_periods_and_shared_exports(tmp_path):
     from pathlib import Path
     import pytest
     from test_statement_layout import run_js
-    path=Path(__file__).resolve().parents[1]/'data/financial-statements.json'
+    import os
+    path=Path(os.environ.get('FINANCIAL_REBUILT_SNAPSHOT', Path(__file__).resolve().parents[1]/'data/financial-statements.json'))
     if not path.exists():
         pytest.skip('Private real snapshot not committed')
     snapshot=json.loads(path.read_text(encoding='utf-8'))
@@ -86,8 +87,11 @@ def test_real_snapshot_all_periods_and_shared_exports(tmp_path):
         assert sync.validate_statement_bridge(updated)['passed']
         # Raw snapshot stays untouched; exercise the generated rows, not stale stored layout.
         period['payload']['statement']['presentation']=presentation
+        # Publication canonical strings duplicate payloads and can exceed Node's
+        # single-string ceiling; they are not part of the browser/export contract.
+        period.pop('payload_canonical', None)
     generated=tmp_path/'layout.json'
-    generated.write_text(json.dumps(snapshot),encoding='utf-8')
+    generated.write_text(json.dumps(snapshot,separators=(',',':')),encoding='utf-8')
     # The only in-memory changes are presentation; raw GP rows, balances and KPI source remain intact.
     for old,new in zip(original['periods'],snapshot['periods']):
         for key in ('income_statement','balance_sheet','kpis','trend'):
@@ -127,7 +131,8 @@ def test_real_snapshot_full_builder_controls_and_trends():
     import json
     from pathlib import Path
     import pytest
-    path=Path(__file__).resolve().parents[1]/'data/financial-statements.json'
+    import os
+    path=Path(os.environ.get('FINANCIAL_REBUILT_SNAPSHOT', Path(__file__).resolve().parents[1]/'data/financial-statements.json'))
     if not path.exists():
         pytest.skip('Private real snapshot not committed')
     snapshot=json.loads(path.read_text(encoding='utf-8'))

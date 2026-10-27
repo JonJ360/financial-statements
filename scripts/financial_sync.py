@@ -19,7 +19,7 @@ D = decimal.Decimal
 ZERO = D("0.00000")
 CONTROL_TOLERANCE = D("0.01")
 MIN_FISCAL_YEAR = 2020
-MAPPING_VERSION = "4.0.0"
+MAPPING_VERSION = "4.1.0"
 CONTROL_VERSION = "1.1.0"
 MAIN_SERVER = "192.168.1.25,49934"
 SMI_SERVER = "192.168.1.25,50497"
@@ -822,45 +822,58 @@ def validate_statement_bridge(statement: Mapping[str, Any]) -> dict[str, Any]:
 
 
 SMI_BRANCHES = {"00": "Fargo", "01": "Grand Forks", "02": "Fergus Falls", "03": "Bismarck"}
+OPAT_PROPERTIES = {"00": "Shared/unassigned", "01": "Ten Acres", "02": "Pelican Retreat",
+                   "03": "Arizona", "04": "Alaska", "05": "Montana"}
 BRANCH_NOTE = ("Branch balances are unallocated GP account balances, not standalone legal-entity "
                "balance sheets. Central cash, receivables, liabilities and equity remain in their "
                "recorded branch; no allocation or balancing plug is applied.")
+PROPERTY_NOTE = ("Property balances are unallocated GP account balances, not standalone legal-entity "
+                 "balance sheets. Shared/unassigned accounts, including central liabilities and equity, "
+                 "remain in their recorded property segment; no allocation or balancing plug is applied. "
+                 "Monthly reconciliation is company-wide, not property-specific.")
+# Reviewed account-number scopes, never inherited GL40200 segment descriptions.
+COMPANY_BRANCH_CONFIG = {
+    "SMI": {"names": SMI_BRANCHES, "segment": 2, "note": BRANCH_NOTE},
+    "OPAT": {"names": OPAT_PROPERTIES, "segment": 2, "note": PROPERTY_NOTE},
+}
 
 
-def _branch_code(row: Mapping[str, Any]) -> str:
+def _branch_code(row: Mapping[str, Any], company_code: str = "SMI") -> str:
     number = str(row.get("account_number") or "")
     if not re.fullmatch(r"[^-]+-[^-]+-[^-]+", number):
-        raise SourceValidationError(f"SMI branch account must have three segments: {number}")
-    return number.rsplit("-", 1)[1]
+        raise SourceValidationError(f"{company_code} branch account must have three segments: {number}")
+    return number.split("-")[COMPANY_BRANCH_CONFIG[company_code]["segment"]]
 
 
 def _branch_statements(
     company: CompanyConfig, current: list[dict[str, Any]], prior: list[dict[str, Any]],
     history: list[list[dict[str, Any]]], periods: list[Mapping[str, Any]], comparison_available: bool,
 ) -> dict[str, Any]:
-    if company.code != "SMI":
+    if company.code not in COMPANY_BRANCH_CONFIG:
         return {}
-    codes = sorted(set(SMI_BRANCHES) | {_branch_code(row) for row in current + prior})
+    config = COMPANY_BRANCH_CONFIG[company.code]
+    names = config["names"]
+    codes = sorted(set(names) | {_branch_code(row, company.code) for row in current + prior})
     branches = {}
     for code in codes:
-        selected = [row for row in current if _branch_code(row) == code]
-        previous = [row for row in prior if _branch_code(row) == code]
+        selected = [row for row in current if _branch_code(row, company.code) == code]
+        previous = [row for row in prior if _branch_code(row, company.code) == code]
         metrics = _statement_metrics(selected, company.code)
         presentation = _presentation(company, _with_current_earnings(selected), _with_current_earnings(previous))
         if not comparison_available:
             _mark_missing_comparison(presentation)
         trend = []
         for period, accounts in zip(periods, history):
-            values = _statement_metrics([row for row in accounts if _branch_code(row) == code], company.code)
+            values = _statement_metrics([row for row in accounts if _branch_code(row, company.code) == code], company.code)
             trend.append({"fiscal_year": int(period["year"]), "fiscal_period": int(period["period"]),
                           **{key: _money(values[key]) for key in (
                               "revenue", "cost_of_goods_sold", "gross_profit", "operating_expenses", "net_income")}})
         statement = {
-            "branch_code": code, "branch_name": SMI_BRANCHES.get(code, f"Other account segment {code}"),
-            "selectable": code in SMI_BRANCHES or any(
+            "branch_code": code, "branch_name": names.get(code, f"Other account segment {code}"),
+            "selectable": code in names or any(
                 _decimal(row.get(key, 0)) != ZERO for row in selected + previous
                 for key in ("period_debit", "period_credit", "ytd_debit", "ytd_credit")),
-            "scope_note": BRANCH_NOTE,
+            "scope_note": config["note"],
             "income_statement": [row for row in selected if row["posting_type"] == 1],
             "balance_sheet": [row for row in _with_current_earnings(selected) if row["posting_type"] == 0],
             "presentation": presentation,
@@ -870,12 +883,16 @@ def _branch_statements(
             "trend": trend,
             "balance_sheet_difference": _money(metrics["assets"] - metrics["liabilities"] - metrics["equity"]),
         }
+        if company.code == "OPAT":
+            statement["scope_note"] += (
+                " Assets less liabilities and equity (unallocated residual): "
+                + statement["balance_sheet_difference"] + ".")
         statement["bridge_controls"] = validate_statement_bridge(statement)
         branches[code] = statement
     totals = _statement_metrics(current, company.code)
     for key in next(iter(branches.values()))["kpis"]:
         if sum((_decimal(branch["kpis"][key]) for branch in branches.values()), ZERO) != totals[key]:
-            raise SourceValidationError(f"SMI branch-to-company bridge failed: {key}")
+            raise SourceValidationError(f"{company.code} branch-to-company bridge failed: {key}")
     return branches
 
 
@@ -913,7 +930,7 @@ def _period_payload(
         },
     }
     statement["bridge_controls"] = validate_statement_bridge(statement)
-    if company.code == "SMI":
+    if company.code in COMPANY_BRANCH_CONFIG:
         statement["branches"] = _branch_statements(
             company, accounts, prior_accounts, branch_history or [], branch_periods or [], bool(prior_accounts))
     payload = {
@@ -982,8 +999,8 @@ def build_company_payloads(
         _period_payload(
             company, period, mapped[(int(period["year"]), int(period["period"]))], trend[:index+1],
             mapped.get((int(period["year"])-1, int(period["period"])), []),
-            [mapped[(int(p["year"]), int(p["period"]))] for p in periods[:index+1]] if company.code == "SMI" else [],
-            periods[:index+1] if company.code == "SMI" else [],
+            [mapped[(int(p["year"]), int(p["period"]))] for p in periods[:index+1]] if company.code in COMPANY_BRANCH_CONFIG else [],
+            periods[:index+1] if company.code in COMPANY_BRANCH_CONFIG else [],
         )
         for index, period in enumerate(periods)
     ]

@@ -34,7 +34,7 @@ def test_standard_layout_real_edge():
         page.route('**/*', route_request)
         page.goto('http://financial.local/')
         page.wait_for_function("!document.getElementById('authGate').classList.contains('hidden')")
-        scopes = [('SMI',''),('SMI','00'),('SMI','01'),('SMI','02'),('SMI','03'),('RRCOF',''),('BBMTS',''),('SFAB','')]
+        scopes = [('OPAT', code) for code in ['', '00', '01', '02', '03', '04', '05']] + [('SMI',''),('SMI','00'),('SMI','01'),('SMI','02'),('SMI','03'),('RRCOF',''),('BBMTS',''),('SFAB','')]
         for company, branch in scopes:
             payload = next(p['payload'] for p in snapshot['periods'] if p['company_code']==company and p['fiscal_year']==2026 and p['fiscal_period']==6)
             page.evaluate("""payload=>{
@@ -47,8 +47,10 @@ def test_standard_layout_real_edge():
                 showApplication({user:{email:'Offline real GP snapshot verification'}});
                 populateBranches();applyBranch();selectStatement('income');
             }""",payload)
-            if company=='SMI':
-                assert page.locator('#branchSelect option').all_text_contents()==['Consolidated — All branches','00 — Fargo','01 — Grand Forks','02 — Fergus Falls','03 — Bismarck']
+            if company in ('SMI', 'OPAT'):
+                names = (['00 — Fargo','01 — Grand Forks','02 — Fergus Falls','03 — Bismarck'] if company == 'SMI' else ['00 — Shared/unassigned','01 — Ten Acres','02 — Pelican Retreat','03 — Arizona','04 — Alaska','05 — Montana'])
+                assert page.locator('#branchLabel').text_content() == ('Property' if company == 'OPAT' else 'Branch')
+                assert page.locator('#branchSelect option').all_text_contents()==['Consolidated — All '+('properties' if company == 'OPAT' else 'branches'), *names]
                 if branch:
                     page.select_option('#branchSelect',branch)
             else:
@@ -81,7 +83,7 @@ def test_standard_layout_real_edge():
                 download=pending.value
                 download.save_as(str(output/(name+extension)))
                 if branch:
-                    assert '-branch-'+branch+'-' in download.suggested_filename
+                    assert ('-property-' if company == 'OPAT' else '-branch-')+branch+'-' in download.suggested_filename
             workbook=openpyxl.load_workbook(output/(name+'.xlsx'))
             assert workbook['Account Detail'].max_row>3 or not any(r.get('detail') or r.get('prior_detail') for kind in ['income','balance'] for r in report[kind])
             assert all(s.sheet_view.pane is None for s in workbook)

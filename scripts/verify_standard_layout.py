@@ -18,6 +18,52 @@ except ImportError:
     from publish_financials import validate_document
 
 
+def verify_consolidated_kpis(before: dict, after: dict) -> None:
+    # No KPI exceptions: a scope-only release cannot restate company results.
+    assert before['kpis'] == after['kpis']
+
+
+def verify_scope_partition(company, statement: dict, raw: dict, key: tuple) -> None:
+    branches = statement['branches']
+    assert set(sync.COMPANY_BRANCH_CONFIG[company.code]['names']) <= set(branches)
+    partition = [r for b in branches.values() for r in b['income_statement'] + b['balance_sheet'] if not r.get('synthetic')]
+    assert sorted(partition, key=lambda r: r['account_number']) == sorted(raw[key], key=lambda r: r['account_number'])
+    for name, value in statement['kpis'].items():
+        assert sum((sync.D(b['kpis'][name]) for b in branches.values()), sync.ZERO) == sync.D(value)
+    for kind in ['income_statement', 'balance_sheet']:
+        summary = {r['id']: r for r in statement['presentation'][kind] if r['row_type'] in {'section', 'subtotal'}}
+        for identifier, row in summary.items():
+            for column, value in row['values'].items():
+                values = [next((r['values'].get(column) for r in b['presentation'][kind] if r['id'] == identifier), None) for b in branches.values()]
+                if value is None:
+                    assert all(v is None for v in values)
+                else:
+                    assert sum((sync.D(v) for v in values if v is not None), sync.ZERO) == sync.D(value), (key, identifier, column)
+    expected_history = sorted(k for k in raw if k <= key)
+    for code, branch in branches.items():
+        assert branch['bridge_controls']['passed']
+        sync.validate_statement_bridge(branch)
+        assert branch['comparison']['available'] == statement['comparison']['available']
+        assert sync.D(branch['balance_sheet_difference']) == sync.D(branch['kpis']['assets']) - sync.D(branch['kpis']['liabilities']) - sync.D(branch['kpis']['equity'])
+        # Independently select current/prior raw rows, including zero and prior-only accounts.
+        scoped = lambda rows: [r for r in rows if sync._branch_code(r, company.code) == code]
+        prior = raw.get((key[0]-1, key[1]), [])
+        expected = sync._presentation(company, sync._with_current_earnings(scoped(raw[key])), sync._with_current_earnings(scoped(prior)))
+        if not prior:
+            sync._mark_missing_comparison(expected)
+        assert branch['presentation'] == expected
+        assert [(t['fiscal_year'], t['fiscal_period']) for t in branch['trend']] == expected_history
+        for trend in branch['trend']:
+            metrics = sync._statement_metrics(scoped(raw[(trend['fiscal_year'], trend['fiscal_period'])]), company.code)
+            for name in ['revenue', 'cost_of_goods_sold', 'gross_profit', 'operating_expenses', 'net_income']:
+                assert trend[name] == sync._money(metrics[name])
+    for trend_key in expected_history:
+        totals = sync._statement_metrics(raw[trend_key], company.code)
+        for name in ['revenue', 'cost_of_goods_sold', 'gross_profit', 'operating_expenses', 'net_income']:
+            values = [next(t[name] for t in b['trend'] if (t['fiscal_year'], t['fiscal_period']) == trend_key) for b in branches.values()]
+            assert sum((sync.D(v) for v in values), sync.ZERO) == totals[name]
+
+
 def verify(source: Path, output: Path) -> dict:
     original_bytes = source.read_bytes()
     document = json.loads(original_bytes)
@@ -37,9 +83,11 @@ def verify(source: Path, output: Path) -> dict:
             assert before['income_statement'] == after['income_statement']
             assert before['balance_sheet'] == after['balance_sheet']
             assert before['comparison'] == after['comparison']
-            for key, value in before['kpis'].items():
-                if key != 'operating_expenses':
-                    assert value == after['kpis'][key], (sync.period_key(old), key)
+            verify_consolidated_kpis(before, after)
+            assert before['trend'] == after['trend']
+            assert before['presentation'] == after['presentation']
+            if company.code != 'OPAT':
+                assert before.get('branches') == after.get('branches')
             for statement_type in ['income_statement', 'balance_sheet']:
                 old_rows = {r['id']: r for r in before['presentation'][statement_type]}
                 new_rows = {r['id']: r for r in after['presentation'][statement_type]}
@@ -48,29 +96,9 @@ def verify(source: Path, output: Path) -> dict:
             assert after['bridge_controls']['passed']
             for row in after['income_statement']:
                 audit[(company.code, row['account_number'], row['account_description'])] = sync._income_section(row, company.code)
-            if company.code == 'SMI':
-                branches = after['branches']
-                assert set(sync.SMI_BRANCHES) <= set(branches)
-                branch_count += len(branches)
-                partition = [r['account_number'] for branch in branches.values() for r in branch['income_statement'] + branch['balance_sheet'] if not r.get('synthetic')]
-                assert sorted(partition) == sorted(r['account_number'] for r in raw[(old['fiscal_year'], old['fiscal_period'])])
-                for kind in ['income_statement', 'balance_sheet']:
-                    summary = {r['id']: r for r in after['presentation'][kind] if r['row_type'] in {'section', 'subtotal'}}
-                    for identifier, row in summary.items():
-                        for key, value in row['values'].items():
-                            values = [next((r['values'].get(key) for r in branch['presentation'][kind] if r['id'] == identifier), None) for branch in branches.values()]
-                            if value is None:
-                                assert all(v is None for v in values)
-                            else:
-                                assert sum((sync.D(v) for v in values if v is not None), sync.ZERO) == sync.D(value), (sync.period_key(old), identifier, key)
-                for branch in branches.values():
-                    assert branch['bridge_controls']['passed']
-                    assert branch['comparison']['available'] == after['comparison']['available']
-                    for trend in branch['trend']:
-                        accounts = [r for r in raw[(trend['fiscal_year'], trend['fiscal_period'])] if sync._branch_code(r) == branch['branch_code']]
-                        metrics = sync._statement_metrics(accounts, company.code)
-                        for key in ['revenue', 'gross_profit', 'operating_expenses', 'net_income']:
-                            assert trend[key] == sync._money(metrics[key])
+            if company.code in sync.COMPANY_BRANCH_CONFIG:
+                verify_scope_partition(company, after, raw, (old['fiscal_year'], old['fiscal_period']))
+                branch_count += len(after['branches'])
             # Rebuild from frozen raw rows cannot reread GP close flags; preserve their verified evidence.
             new['payload']['monthly_recon'] = old['payload'].get('monthly_recon')
             new['payload_canonical'] = sync.canonical_json(new['payload'])

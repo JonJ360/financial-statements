@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.mark.skipif(os.getenv('FINANCIAL_EDGE_VERIFY') != '1', reason='Opt-in local Edge/snapshot verification')
 def test_edge_statement_layout_and_downloads():
     from playwright.sync_api import sync_playwright
-    snapshot = json.loads((ROOT / 'data/financial-statements.json').read_text())
+    snapshot = json.loads(Path(os.environ.get('FINANCIAL_REBUILT_SNAPSHOT', ROOT / 'data/financial-statements.json')).read_text(encoding='utf-8'))
     payload = max(snapshot['periods'], key=lambda p: len(p['payload']['statement']['presentation']['income_statement']))['payload']
     output = Path(os.environ['LOCALAPPDATA']) / 'hermes/cache/scratch/financial-v26-edge'
     output.mkdir(parents=True, exist_ok=True)

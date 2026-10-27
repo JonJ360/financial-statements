@@ -27,7 +27,9 @@ Each selected fiscal month has a read-only **Monthly recon completed** checkbox.
 
 Full tests: `python -m pytest tests -q`. Opt-in local Edge visual/export checks: `FINANCIAL_EDGE_VERIFY=1 python -m pytest tests -q -s`.
 
-## Standard financial layout (mapping 4.0.0)
+## Standard financial layout (mapping 4.1.0; UI V2.12)
+
+- OPAT property views use the third GL segment: 00 Shared/unassigned, 01 Ten Acres, 02 Pelican Retreat, 03 Arizona, 04 Alaska, 05 Montana. These are account scopes within Opatril Properties, not separate legal-entity statements. Inherited GP segment descriptions are not authoritative property labels. Shared AP/equity remain where posted; each property's real balance-sheet residual is disclosed, without allocations or balancing plugs. Monthly reconciliation remains company-wide. Unknown zero-only scopes remain in reconciliation, including checklinks 99, but are not selectable. The existing statement, trend, drilldown and PDF/XLSX pipeline handles properties.
 
 - All 23 companies share income/balance headings and totals. Detail is classified by account meaning rather than copying one company's numeric codes. Office staff, office expenses, HR, interest, employee insurance and profit sharing are Other Operating Expenses; shop payroll, payroll, FICA and workers compensation are Employee-Related Expenses. Other income/discounts earned are contra-expenses in the shared template; source GP debit/credit and net income are unchanged.
 - RRCOF and BBMTS preserve their historical detail order. SMI COOP STOCK is grouped with Plant, Property & Equipment per the supplied SMI template, without changing assets.

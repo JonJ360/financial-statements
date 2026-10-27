@@ -22,12 +22,22 @@ vm.runInThisContext(code,{filename:'client.js'});
     return result.stdout
 
 
-def test_local_snapshot_all_companies_and_periods():
+def test_local_snapshot_all_companies_and_periods(tmp_path):
     import pytest
-    if not (ROOT / 'data/financial-statements.json').exists():
+    import json
+    import os
+    snapshot_path = Path(os.environ.get('FINANCIAL_REBUILT_SNAPSHOT', ROOT / 'data/financial-statements.json'))
+    if not snapshot_path.exists():
         pytest.skip('Local sensitive snapshot is intentionally not committed')
-    output = run_js("""
-const snapshot=JSON.parse(fs.readFileSync('data/financial-statements.json','utf8'));
+    # Browser reads payloads, not the duplicate publication canonical strings.
+    # Keep the private client fixture below Node's single-string size ceiling.
+    snapshot = json.loads(snapshot_path.read_bytes())
+    for period in snapshot['periods']:
+        period.pop('payload_canonical', None)
+    client_path = tmp_path / 'client-snapshot.json'
+    client_path.write_text(json.dumps(snapshot, separators=(',', ':')), encoding='utf-8')
+    del snapshot
+    output = run_js('const snapshot=JSON.parse(fs.readFileSync('+json.dumps(str(client_path))+",'utf8'));"+"""
 let categories=0,accounts=0;const companies=new Set();
 for(const period of snapshot.periods){
 const before=JSON.stringify(period);const report=normalizeReport(period);
