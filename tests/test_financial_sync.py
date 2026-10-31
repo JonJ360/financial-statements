@@ -664,7 +664,8 @@ class MigrationContractTests(unittest.TestCase):
         sql = "\n".join(path.read_text(encoding="utf-8").lower() for path in migrations)
         validate = sql.rsplit("financial_validate_run", 1)[1]
         payload_check = validate.rsplit("if exists", 1)[1].split("raise exception 'period trend", 1)[0]
-        self.assertIn("where p.run_id = p_run_id", payload_check)
+        # SQL formatting is not part of the run-scoping contract.
+        self.assertRegex(payload_check, r"where\s+p\.run_id\s*=\s*p_run_id\b")
 
     def test_source_connection_prefers_encryption_and_supports_existing_private_sql_viewer(self):
         source = (ROOT / "scripts" / "financial_sync.py").read_text(encoding="utf-8")

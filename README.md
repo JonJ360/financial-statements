@@ -67,6 +67,12 @@ python scripts/publish_financials.py --snapshot data/financial-statements.json -
 
 The publisher stages a run, sends period batches, validates, promotes atomically, then verifies the current run ID, source hash, and period count. A retry with the same source hash is accepted only when all metadata and period conflicts match exactly. This repository does not apply migrations or publish as part of extraction or tests.
 
+## Immutable period content reuse (October 31, 2026)
+
+Migration `202610310001_financial_period_immutable_content_reuse.sql` preserves the publisher RPC API and Jon-only frontend reads. New runs store immutable period references; identical content reuses a SHA-256-keyed payload. The validated current run seeds references to existing immutable legacy rows without copying payloads. `financial_periods_resolved` serves both original history and referenced runs; no original rows are removed. New tables use FORCE RLS and direct access is revoked, including from `service_role`; existing RPC ACLs are preserved. Promotion and rollback APIs are unchanged.
+
+Regression: `python -m pytest tests -q` completed with **90 passed, 2 skipped** (opt-in Edge checks). Isolated PGlite acceptance requires Node and `PGLITE_PACKAGE` pointing to an existing `@electric-sql/pglite` package; it verifies 1,836 periods with 1,831 reused / 5 new payloads, exact payload equality, retries, rollback and failure-atomic/security invariants. Actual production source and previous-run full-row equality were separately verified. A naturally changed scheduled publication remains a separate acceptance gate; do not manually refresh or manufacture GP changes solely to satisfy it. Private evidence/runbook: `C:\Users\jonj\OneDrive\Hermes\Documents\Financial Content Reuse 20261031\STATUS.md`.
+
 ## Vendored ExcelJS patch
 
 `vendor/exceljs-4.4.0-force-full-calc.min.js` is intentionally not the unmodified ExcelJS 4.4.0 distribution. It adds serialization of the workbook `forceFullCalc` calculation property so exported lender workbooks recalculate formulas when opened. The official 4.4.0 artifact SHA-256 is `7e49da68588e250dbb8bba190d2caa8ab3787cc0284bda1d8b2f805c4df742c9`; the reviewed patched artifact SHA-256 is `ab59774d3d6607eefc33eec3f8b184b0635b70942b656bd98014abdaa143eefe`. Removing the single `forceFullCalc` serializer expression restores the official artifact byte-for-byte.
